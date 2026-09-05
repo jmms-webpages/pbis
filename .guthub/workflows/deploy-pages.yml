@@ -1,3 +1,4 @@
+
 name: Deploy to GitHub Pages
 
 # Builds the Vite app (Firebase config injected from repo secrets) and
