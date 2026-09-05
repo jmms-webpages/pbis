@@ -17,7 +17,9 @@ All of the "once per day," "can't award twice," and "role can't be self-selected
    - Under Authentication → Settings → Authorized domains, your Firebase Hosting domain is added automatically.
 3. **Firestore Database** → Create database → start in **production mode** (the rules in this repo replace the default-deny). Choose a region close to your school.
 4. Project Settings → General → "Your apps" → add a **Web app**. Copy the config values into `.env.local` (copy `.env.example` first).
-5. Set `VITE_SCHOOL_GOOGLE_DOMAIN` to your Workspace domain (e.g. `myschool.org`) so the Google sign-in picker is restricted to school accounts. This is a UX nicety — actual enforcement is that only pre-provisioned staff emails get elevated roles (see below).
+5. Set `VITE_SCHOOL_GOOGLE_DOMAINS` to your Workspace domain(s) — comma-separated if you have more than one (e.g. `jackson.sparcc.org,bearkworks.jackson.sparcc.org`). This gives a friendly error on the sign-in screen for non-school accounts, but it's a UX nicety, not the real gate — see the next paragraph.
+
+**The real enforcement is in `firestore.rules`.** Open it and find `isAllowedSchoolEmail()` near the top — edit the domain list there to match exactly what you put in `VITE_SCHOOL_GOOGLE_DOMAINS`, then redeploy rules (this happens automatically on your next push once GitHub Actions is wired up, or you'll need to redeploy manually if you're editing after that). Beyond the domain check, role elevation (teacher/admin) is still separately gated by the pre-provisioned roster, described below.
 
 ## 2. Provision your first admin
 
@@ -58,7 +60,7 @@ To wire it up:
    | `VITE_FIREBASE_STORAGE_BUCKET` | same page |
    | `VITE_FIREBASE_MESSAGING_SENDER_ID` | same page |
    | `VITE_FIREBASE_APP_ID` | same page |
-   | `VITE_SCHOOL_GOOGLE_DOMAIN` | your Workspace domain, e.g. `myschool.org` |
+   | `VITE_SCHOOL_GOOGLE_DOMAINS` | your Workspace domain(s), comma-separated, e.g. `jackson.sparcc.org,bearkworks.jackson.sparcc.org` |
 
 3. Push to `main` (or open a pull request first to get a preview link before it's live). Check the **Actions** tab in GitHub to watch the build/deploy run and see the preview/live URL in the logs.
 
@@ -101,6 +103,6 @@ If you outgrow Spark, the natural upgrades (all optional, not required to run th
 
 ## Known limitations worth knowing about
 
-- The Google Workspace domain restriction (`hd` parameter) is a UX convenience, not a security boundary — actual access control is entirely in `firestore.rules`.
+- The client-side domain check (in `src/lib/firebase.js`/`AuthContext.jsx`) is a UX convenience for a friendlier error message — the actual access control is `isAllowedSchoolEmail()` in `firestore.rules`. Keep both lists in sync when you add/remove a domain.
 - The `roster` → `users` role-claim check compares the Google ID token's email directly; enter roster emails in the exact lowercase form your Workspace issues them in.
 - Reports scan `pointTransactions` for the selected date range live from the client. This is fast at current scale (~1,400 students, a school year of history); if that ever becomes slow, moving the aggregation to a scheduled Cloud Function (Blaze) is the fix.

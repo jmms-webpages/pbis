@@ -18,12 +18,25 @@ export const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
 
-// Restrict Google Sign-In to the school's Google Workspace domain.
-// Replace with your actual domain. This is a UX convenience only —
-// the real enforcement of "who gets what role" happens via the
-// `roster` collection + Firestore rules, not this hint.
 export const googleProvider = new GoogleAuthProvider();
-const SCHOOL_DOMAIN = import.meta.env.VITE_SCHOOL_GOOGLE_DOMAIN || '';
-if (SCHOOL_DOMAIN) {
-  googleProvider.setCustomParameters({ hd: SCHOOL_DOMAIN });
+
+// Which email domains count as "school accounts." Supports a comma-
+// separated list, e.g. "jackson.sparcc.org,bearworks.jackson.sparcc.org"
+// — Google's own `hd` sign-in parameter only accepts ONE domain, so with
+// two-plus domains we skip it and instead check the signed-in account's
+// email against this list ourselves right after sign-in (see
+// AuthContext.jsx). This is still a UX convenience, not the real
+// security boundary — the matching check in firestore.rules is what
+// actually enforces it server-side.
+export const ALLOWED_SCHOOL_DOMAINS = (import.meta.env.VITE_SCHOOL_GOOGLE_DOMAINS || '')
+  .split(',')
+  .map((d) => d.trim().toLowerCase())
+  .filter(Boolean);
+
+// Google's `hd` param only ever narrows the account picker to a single
+// domain, so it's only worth setting when there's exactly one — with
+// multiple domains we leave it off and rely entirely on the post-sign-in
+// check instead (which correctly handles any number of domains).
+if (ALLOWED_SCHOOL_DOMAINS.length === 1) {
+  googleProvider.setCustomParameters({ hd: ALLOWED_SCHOOL_DOMAINS[0] });
 }

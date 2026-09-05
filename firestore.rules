@@ -72,17 +72,29 @@ service cloud.firestore {
     // the initial bootstrap document, and never changeable by the user
     // themselves afterward) ----------
 
+    // EDIT THIS LIST to match your school's actual Google Workspace
+    // domain(s), then redeploy rules. This is the REAL enforcement of
+    // "only school accounts can create an account here" — the matching
+    // check in src/lib/firebase.js is only a same-list UX convenience
+    // that gives a friendlier error before this rule would reject it.
+    function isAllowedSchoolEmail() {
+      let domain = request.auth.token.email.split('@')[1];
+      return domain in ['jackson.sparcc.org', 'bearkworks.jackson.sparcc.org'];
+    }
+
     match /users/{uid} {
       allow read: if isSelf(uid) || isAdmin();
 
       // First-time bootstrap: a signed-in user may create their OWN user
-      // doc exactly once. Critically, the ROLE they claim is validated
-      // here, not trusted from the client: 'student' is always allowed
-      // (no privilege), but 'teacher'/'admin' is only allowed if an
-      // admin already pre-provisioned a matching, unclaimed roster entry
-      // for this exact Google account email. Without this check, a
-      // client could otherwise just request role:'admin' directly.
+      // doc exactly once, and only with a school email (see
+      // isAllowedSchoolEmail() above). Critically, the ROLE they claim is
+      // validated here too, not trusted from the client: 'student' is
+      // always allowed (no privilege), but 'teacher'/'admin' is only
+      // allowed if an admin already pre-provisioned a matching, unclaimed
+      // roster entry for this exact Google account email. Without this
+      // check, a client could otherwise just request role:'admin' directly.
       allow create: if isSelf(uid)
+        && isAllowedSchoolEmail()
         && request.resource.data.setupComplete == false
         && (
           request.resource.data.role == 'student'

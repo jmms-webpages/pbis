@@ -13,7 +13,14 @@ export default function Login() {
       await signIn();
     } catch (e) {
       console.error(e);
-      setError('Sign-in did not go through. Use your school Google account and try again.');
+      // Our own domain-check throws a specific, friendly message —
+      // anything else (popup closed, network error, etc.) falls back to
+      // a generic one.
+      setError(
+        e.message?.startsWith('Please sign in with your school')
+          ? e.message
+          : 'Sign-in did not go through. Use your school Google account and try again.'
+      );
     } finally {
       setBusy(false);
     }

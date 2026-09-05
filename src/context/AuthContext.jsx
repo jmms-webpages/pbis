@@ -10,7 +10,7 @@ import {
   runTransaction,
   serverTimestamp,
 } from 'firebase/firestore';
-import { auth, db, googleProvider } from '../lib/firebase';
+import { auth, db, googleProvider, ALLOWED_SCHOOL_DOMAINS } from '../lib/firebase';
 
 const AuthContext = createContext(null);
 
@@ -128,7 +128,21 @@ export function AuthProvider({ children }) {
   }, []);
 
   const signIn = useCallback(async () => {
-    await signInWithPopup(auth, googleProvider);
+    const result = await signInWithPopup(auth, googleProvider);
+    // With 2+ allowed domains, Google's own account picker can't filter
+    // by domain (its `hd` param only takes one), so we check here instead
+    // and immediately sign back out if it's not a recognized school
+    // account. This is a UX guard, not the real security boundary — the
+    // matching check in firestore.rules is what actually enforces it.
+    if (ALLOWED_SCHOOL_DOMAINS.length > 0) {
+      const emailDomain = (result.user.email || '').split('@')[1]?.toLowerCase();
+      if (!ALLOWED_SCHOOL_DOMAINS.includes(emailDomain)) {
+        await firebaseSignOut(auth);
+        throw new Error(
+          `Please sign in with your school Google account (${ALLOWED_SCHOOL_DOMAINS.join(' or ')}).`
+        );
+      }
+    }
   }, []);
 
   const signOut = useCallback(async () => {
