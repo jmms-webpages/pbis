@@ -1,6 +1,6 @@
 # PBIS Rewards
 
-A school-wide PBIS (Positive Behavioral Interventions & Supports) points platform for students, teachers, and admins. Built with React + Vite + Tailwind + Firebase (Auth, Firestore, Hosting).
+A school-wide PBIS (Positive Behavioral Interventions & Supports) points platform for students, teachers, and admins. Built with React + Vite + Tailwind + Firebase (Authentication + Firestore only — the actual website is hosted elsewhere; see Step 4 below).
 
 ## What this is
 
@@ -14,14 +14,47 @@ All of the "once per day," "can't award twice," and "role can't be self-selected
 
 1. Create a project at [console.firebase.google.com](https://console.firebase.google.com).
 2. **Authentication** → Sign-in method → enable **Google**.
-   - Under Authentication → Settings → Authorized domains, your Firebase Hosting domain is added automatically.
 3. **Firestore Database** → Create database → start in **production mode** (the rules in this repo replace the default-deny). Choose a region close to your school.
-4. Project Settings → General → "Your apps" → add a **Web app**. Copy the config values into `.env.local` (copy `.env.example` first).
+4. Project Settings → General → "Your apps" → add a **Web app**. You don't need to check "also set up Firebase Hosting" — leave that unchecked. Copy the six config values shown into `.env.local` (copy `.env.example` first) if you're running locally, or into wherever your host's environment variables go (see Step 4).
 5. Set `VITE_SCHOOL_GOOGLE_DOMAINS` to your Workspace domain(s) — comma-separated if you have more than one (e.g. `jackson.sparcc.org,bearkworks.jackson.sparcc.org`). This gives a friendly error on the sign-in screen for non-school accounts, but it's a UX nicety, not the real gate — see the next paragraph.
 
-**The real enforcement is in `firestore.rules`.** Open it and find `isAllowedSchoolEmail()` near the top — edit the domain list there to match exactly what you put in `VITE_SCHOOL_GOOGLE_DOMAINS`, then redeploy rules (this happens automatically on your next push once GitHub Actions is wired up, or you'll need to redeploy manually if you're editing after that). Beyond the domain check, role elevation (teacher/admin) is still separately gated by the pre-provisioned roster, described below.
+**The real enforcement is in `firestore.rules`.** Open it and find `isAllowedSchoolEmail()` near the top — edit the domain list there to match exactly what you put in `VITE_SCHOOL_GOOGLE_DOMAINS`, then publish it (see Step 2 below). Beyond the domain check, role elevation (teacher/admin) is still separately gated by the pre-provisioned roster, described below.
 
-## 2. Provision your first admin
+## 2. Publish your Firestore rules and indexes
+
+No CLI or service account needed for this — just paste and click:
+
+1. In Firebase Console, go to **Firestore Database → Rules**.
+2. Open `firestore.rules` from this repo, select all, copy it.
+3. Paste it into the Rules editor in Firebase Console, replacing what's there.
+4. Click **Publish**.
+5. For indexes: go to **Firestore Database → Indexes → Composite**, and add each entry listed in `firestore.indexes.json` by hand using the "Create index" button (collection name, fields, and sort order for each). Alternatively, skip this for now — Firestore will show a direct "create this index" link in the browser console the first time a query needs one that's missing, which you can just click.
+
+Any time you or I change `firestore.rules` going forward, repeat steps 2–4 — it's a two-minute copy/paste, not a deploy pipeline.
+
+## 3. Push your code to GitHub
+
+Unzip the project, then either use GitHub Desktop (File → Add Local Repository → Publish) or:
+```bash
+git init
+git add .
+git commit -m "Initial commit"
+git branch -M main
+git remote add origin https://github.com/YOUR-USERNAME/YOUR-REPO-NAME.git
+git push -u origin main
+```
+
+## 4. Host the actual website
+
+This repo builds to a folder of static files (`npm run build` → a `dist` folder) — any static host works. Pick whichever you're already comfortable with:
+
+- **Netlify** or **Vercel** — connect your GitHub repo through their website (sign in with GitHub, pick the repo), no CLI needed. Set the build command to `npm run build` and the output folder to `dist`. Add the same Firebase config values from Step 1 as environment variables in their dashboard (same names as in `.env.example`, e.g. `VITE_FIREBASE_API_KEY`). Once connected, every push to `main` redeploys automatically — that's the only "CI/CD" this project needs now.
+- **GitHub Pages** — works too, though it needs a small Vite config tweak for the base path; ask if you want to go this route and we'll set it up.
+- Your school/district's own web server — build locally (`npm run build`) and upload the contents of `dist` wherever static files are served from.
+
+Whichever you choose, add its domain to Firebase Console → **Authentication → Settings → Authorized domains**, or Google Sign-In will refuse to work there.
+
+## 5. Provision your first admin
 
 Because roles are never self-selected, **you need at least one admin roster entry before anyone signs in**, or the very first person to sign in only ever becomes a student. The cleanest way for the very first admin:
 
@@ -35,38 +68,7 @@ Because roles are never self-selected, **you need at least one admin roster entr
 3. Sign in to the app with that email — you'll land in the Admin Dashboard automatically.
 4. From there, use the **Staff Roster** tab to add every other teacher and admin's email — no more manual Firestore edits needed after this.
 
-## 3. Push to GitHub and connect CI/CD
-
-This repo includes `.github/workflows/deploy.yml`, which builds and deploys automatically — no local `npm run build`/`firebase deploy` needed:
-- **Pull requests** get a temporary Firebase Hosting preview channel (safe to test without touching production).
-- **Pushes to `main`** deploy to live Hosting and push `firestore.rules`/`firestore.indexes.json`.
-
-To wire it up:
-
-1. **Create a Firebase service account key** for CI. Easiest path — run this once from any machine with Node (it walks you through creating the service account and adding the GitHub secret automatically):
-   ```bash
-   npx firebase-tools login
-   npx firebase-tools init hosting:github
-   ```
-   Or manually: Google Cloud Console → IAM & Admin → Service Accounts → create one with **Firebase Hosting Admin** and **Cloud Datastore Owner** (needed for Firestore rules deploys) roles → create a JSON key → paste its full contents into a GitHub secret named `FIREBASE_SERVICE_ACCOUNT`.
-
-2. **Add the rest of the repository secrets** (GitHub repo → Settings → Secrets and variables → Actions → New repository secret). These are the same values that would otherwise go in a local `.env.local` — with GitHub Actions you never create that file at all, since the workflow injects them at build time:
-
-   | Secret | Where to find it |
-   |---|---|
-   | `VITE_FIREBASE_API_KEY` | Firebase Console → Project Settings → General → Your apps |
-   | `VITE_FIREBASE_AUTH_DOMAIN` | same page |
-   | `VITE_FIREBASE_PROJECT_ID` | same page |
-   | `VITE_FIREBASE_STORAGE_BUCKET` | same page |
-   | `VITE_FIREBASE_MESSAGING_SENDER_ID` | same page |
-   | `VITE_FIREBASE_APP_ID` | same page |
-   | `VITE_SCHOOL_GOOGLE_DOMAINS` | your Workspace domain(s), comma-separated, e.g. `jackson.sparcc.org,bearkworks.jackson.sparcc.org` |
-
-3. Push to `main` (or open a pull request first to get a preview link before it's live). Check the **Actions** tab in GitHub to watch the build/deploy run and see the preview/live URL in the logs.
-
-Every future change is just: edit files → commit → push (or merge a PR) → Actions redeploys automatically.
-
-## 4. Add your question pool
+## 6. Add your question pool
 
 Admin Dashboard → **Daily Challenge Questions** → add a handful of questions about your school's rules/expectations. Each needs at least 2 answer choices and one marked correct. Mark them **Active** to include them in the daily rotation.
 

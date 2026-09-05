@@ -6,8 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview",
-    "deploy": "npm run build && firebase deploy --only hosting"
+    "preview": "vite preview"
   },
   "dependencies": {
     "firebase": "^10.14.1",
