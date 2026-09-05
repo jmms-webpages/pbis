@@ -1,0 +1,362 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- Helpers ----------
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function myRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && myRole() == 'admin';
+    }
+
+    function isTeacher() {
+      return isSignedIn() && myRole() == 'teacher';
+    }
+
+    function isStudent() {
+      return isSignedIn() && myRole() == 'student';
+    }
+
+    function isSelf(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // Builds the deterministic dailyAwards guard-doc ID for a given
+    // student/date/category. Used to PAIR the cached-totals update and
+    // the ledger-entry creation with the guard doc's own creation, so the
+    // three writes can never be split apart from one another.
+    function guardId(uid, dateKey, category) {
+      return uid + '_' + dateKey + '_' + category;
+    }
+
+    // All categories a teacher can award — three given per-student from a
+    // class roster row, three given to a whole class at once via a quick
+    // -action button. All are worth 5 points. Maps each to the specific
+    // count field on the student doc that tracks it.
+    function teacherCategories() {
+      return ['SAFE', 'KIND', 'RESPONSIBLE', 'WORK_COMPLETION', 'ALL_BADGES', 'ON_TASK'];
+    }
+    function teacherCountField(category) {
+      return category == 'SAFE' ? 'safeCount'
+        : category == 'KIND' ? 'kindCount'
+        : category == 'RESPONSIBLE' ? 'responsibleCount'
+        : category == 'WORK_COMPLETION' ? 'workCompletionCount'
+        : category == 'ALL_BADGES' ? 'allBadgesCount'
+        : 'onTaskCount'; // ON_TASK
+    }
+
+    // Validates that a "YYYY-MM-DD" dateKey string actually corresponds to
+    // the CURRENT day on the server, per UTC. This is what stops a
+    // student or teacher from spoofing yesterday's or tomorrow's dateKey
+    // to bypass a once-per-day limit — request.time is set by Firestore's
+    // servers and cannot be forged by the client.
+    function isValidDateKeyForNow(dateKey) {
+      let parts = dateKey.split('-');
+      let y = int(parts[0]);
+      let m = int(parts[1]);
+      let d = int(parts[2]);
+      let dayStart = timestamp.date(y, m, d);
+      let dayEnd = timestamp.date(y, m, d) + duration.value(1, 'd');
+      return request.time >= dayStart && request.time < dayEnd;
+    }
+
+    // ---------- users (role is protected; never client-settable except
+    // the initial bootstrap document, and never changeable by the user
+    // themselves afterward) ----------
+
+    match /users/{uid} {
+      allow read: if isSelf(uid) || isAdmin();
+
+      // First-time bootstrap: a signed-in user may create their OWN user
+      // doc exactly once. Critically, the ROLE they claim is validated
+      // here, not trusted from the client: 'student' is always allowed
+      // (no privilege), but 'teacher'/'admin' is only allowed if an
+      // admin already pre-provisioned a matching, unclaimed roster entry
+      // for this exact Google account email. Without this check, a
+      // client could otherwise just request role:'admin' directly.
+      allow create: if isSelf(uid)
+        && request.resource.data.setupComplete == false
+        && (
+          request.resource.data.role == 'student'
+          || (
+            request.resource.data.role in ['teacher', 'admin']
+            && get(/databases/$(database)/documents/roster/$(request.auth.token.email)).data.role == request.resource.data.role
+            && get(/databases/$(database)/documents/roster/$(request.auth.token.email)).data.claimed == false
+          )
+        );
+
+      // The user may only ever flip their OWN setupComplete flag; every
+      // other field (especially `role`) is immutable to them.
+      allow update: if (isSelf(uid)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['setupComplete']))
+        || isAdmin();
+    }
+
+    // ---------- roster (admin pre-provisioning of staff roles) ----------
+
+    match /roster/{email} {
+      allow read: if isAdmin();
+      // Only the account claiming ITS OWN roster entry may mark it
+      // claimed — otherwise anyone could grief a colleague's entry by
+      // marking it claimed before they ever sign in.
+      allow update: if isSignedIn()
+        && email == request.auth.token.email
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimed', 'claimedBy', 'claimedAt'])
+        && request.resource.data.claimed == true;
+      allow create, delete: if isAdmin();
+    }
+
+    // ---------- students (profile + denormalized totals) ----------
+
+    match /students/{uid} {
+      allow read: if isSignedIn(); // needed for leaderboards, rosters, search
+
+      allow create: if isSelf(uid); // created by the bootstrap transaction only
+
+      // Grade can be set once during setup by the student themselves;
+      // afterward only an admin may change it.
+      allow update: if isAdmin()
+        || (isSelf(uid)
+            && resource.data.grade == null
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['grade'])
+            && request.resource.data.grade in [6, 7, 8])
+
+        // Teacher awards (SAFE/KIND/RESPONSIBLE, or a whole-class quick
+        // action like WORK_COMPLETION): totals may change ONLY as part of
+        // the exact same transaction that creates today's guard doc for
+        // this category. !exists() confirms the guard didn't exist before
+        // this transaction; existsAfter() confirms THIS transaction is the
+        // one creating it. A client can't satisfy both by calling this
+        // update in isolation — existsAfter() would be false because no
+        // sibling write in that call would have created the guard.
+        // teacherCountField() picks out exactly one count field to check
+        // — using bracket access (data[fieldName]) lets one rule branch
+        // cover all six teacher categories instead of one branch each.
+        || (isTeacher()
+            && request.resource.data.lastAwardCategory in teacherCategories()
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['totalPoints', teacherCountField(request.resource.data.lastAwardCategory), 'lastAwardCategory', 'lastAwardDateKey'])
+            && isValidDateKeyForNow(request.resource.data.lastAwardDateKey)
+            && request.resource.data.totalPoints - resource.data.totalPoints == 5
+            && request.resource.data[teacherCountField(request.resource.data.lastAwardCategory)]
+                 - resource.data[teacherCountField(request.resource.data.lastAwardCategory)] == 1
+            && !exists(/databases/$(database)/documents/dailyAwards/$(guardId(uid, request.resource.data.lastAwardDateKey, request.resource.data.lastAwardCategory)))
+            && existsAfter(/databases/$(database)/documents/dailyAwards/$(guardId(uid, request.resource.data.lastAwardDateKey, request.resource.data.lastAwardCategory))))
+
+        // Daily Challenge: same pairing pattern, but the student updates
+        // their own totals and it's tied to today's DAILY_CHALLENGE guard.
+        || (isStudent() && isSelf(uid)
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['totalPoints', 'dailyChallengeCount', 'lastAwardCategory', 'lastAwardDateKey'])
+            && request.resource.data.lastAwardCategory == 'DAILY_CHALLENGE'
+            && isValidDateKeyForNow(request.resource.data.lastAwardDateKey)
+            && request.resource.data.totalPoints - resource.data.totalPoints == 10
+            && request.resource.data.dailyChallengeCount - resource.data.dailyChallengeCount == 1
+            && !exists(/databases/$(database)/documents/dailyAwards/$(guardId(uid, request.resource.data.lastAwardDateKey, 'DAILY_CHALLENGE')))
+            && existsAfter(/databases/$(database)/documents/dailyAwards/$(guardId(uid, request.resource.data.lastAwardDateKey, 'DAILY_CHALLENGE'))));
+    }
+
+    // ---------- teachers ----------
+
+    match /teachers/{uid} {
+      allow read: if isSignedIn();
+      allow create: if isSelf(uid);
+      allow update: if isAdmin()
+        || (isSelf(uid) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['gradeLevels']));
+    }
+
+    // ---------- classes ----------
+
+    match /classes/{classId} {
+      // Tightened from "any signed-in user" — nothing in the app needs a
+      // student to read a class document directly. Students join via the
+      // public classCodeIndex lookup (below) plus a blind write to
+      // studentIds; Firestore allows writing to a document you don't have
+      // read access to, and rule evaluation still sees the full
+      // resource/request data regardless of the read rule.
+      allow read: if isAdmin() || (isTeacher() && resource.data.teacherId == request.auth.uid);
+
+      allow create: if isTeacher()
+        && request.resource.data.teacherId == request.auth.uid
+        && request.resource.data.joinable == true;
+
+      allow update: if isAdmin()
+        || (isTeacher() && resource.data.teacherId == request.auth.uid)
+        // Student self-join via a class code. The "secret" here is really
+        // knowing this document's (unguessable, random) ID at all — that's
+        // only discoverable via a valid code lookup in classCodeIndex — so
+        // this rule just needs to confirm the class is currently open,
+        // and that the update does nothing except append the caller's own
+        // uid to studentIds (no removals, no other field changes, and not
+        // adding anyone else).
+        || (isStudent()
+            && resource.data.joinable == true
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['studentIds'])
+            && request.resource.data.studentIds.hasAll(resource.data.studentIds)
+            && request.resource.data.studentIds.hasAll([request.auth.uid])
+            && request.resource.data.studentIds.size() == resource.data.studentIds.size() + 1);
+
+      allow delete: if isAdmin() || (isTeacher() && resource.data.teacherId == request.auth.uid);
+    }
+
+    // ---------- classCodeIndex (public code -> classId lookup, so a
+    // student can resolve a shared code to a class without ever needing
+    // read access to the class document itself) ----------
+
+    match /classCodeIndex/{code} {
+      allow read: if isSignedIn();
+
+      allow create: if isTeacher()
+        && request.resource.data.teacherId == request.auth.uid
+        && request.resource.data.active == true
+        // getAfter(), not get(): the class doc is created in the SAME
+        // batch as this index doc (see NewClassModal), so get() would
+        // still see "doesn't exist yet" — getAfter() checks the state
+        // once the whole batch has committed, which is what we need here.
+        && getAfter(/databases/$(database)/documents/classes/$(request.resource.data.classId)).data.teacherId == request.auth.uid;
+
+      // Only the owning teacher (or admin) can lock/unlock a code by
+      // flipping `active` — nothing else about a code entry ever changes.
+      allow update: if isAdmin()
+        || (isTeacher()
+            && resource.data.teacherId == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active']));
+
+      allow delete: if isAdmin() || (isTeacher() && resource.data.teacherId == request.auth.uid);
+    }
+
+    // ---------- pointTransactions (append-only audit ledger) ----------
+
+    match /pointTransactions/{txId} {
+      allow read: if isAdmin()
+        || (isStudent() && resource.data.studentId == request.auth.uid)
+        || (isTeacher() && resource.data.teacherId == request.auth.uid);
+
+      // Admin corrections
+      allow create: if isAdmin()
+        && request.resource.data.source == 'ADMIN'
+        && request.resource.data.adminId == request.auth.uid
+        && request.resource.data.reason is string
+        && request.resource.data.reason.size() > 0;
+
+      // Teacher awards: only for a student who is actually in a class this
+      // teacher owns, and only for the six teacher-awardable categories
+      // (three per-student, three whole-class quick actions).
+      // Paired to the SAME guard-doc creation via !exists()/existsAfter()
+      // so this ledger entry can only ever be written once per
+      // student+day+category, in lockstep with the guard doc and the
+      // cached-totals update — none of the three can happen without all
+      // three succeeding together in the same transaction.
+      allow create: if isTeacher()
+        && request.resource.data.source == 'TEACHER'
+        && request.resource.data.teacherId == request.auth.uid
+        && request.resource.data.category in teacherCategories()
+        && request.resource.data.points == 5
+        && get(/databases/$(database)/documents/classes/$(request.resource.data.classId)).data.teacherId == request.auth.uid
+        && request.resource.data.studentId in get(/databases/$(database)/documents/classes/$(request.resource.data.classId)).data.studentIds
+        && isValidDateKeyForNow(request.resource.data.dateKey)
+        && !exists(/databases/$(database)/documents/dailyAwards/$(guardId(request.resource.data.studentId, request.resource.data.dateKey, request.resource.data.category)))
+        && existsAfter(/databases/$(database)/documents/dailyAwards/$(guardId(request.resource.data.studentId, request.resource.data.dateKey, request.resource.data.category)));
+
+      // Daily Challenge: same pairing — this ledger entry can only be
+      // created in the same transaction that creates today's
+      // DAILY_CHALLENGE guard doc (which itself only succeeds when the
+      // submitted answer is verified correct — see dailyAwards below).
+      allow create: if isStudent()
+        && request.resource.data.source == 'DAILY_CHALLENGE'
+        && request.resource.data.studentId == request.auth.uid
+        && request.resource.data.points == 10
+        && request.resource.data.category == 'DAILY_CHALLENGE'
+        && isValidDateKeyForNow(request.resource.data.dateKey)
+        && !exists(/databases/$(database)/documents/dailyAwards/$(guardId(request.resource.data.studentId, request.resource.data.dateKey, 'DAILY_CHALLENGE')))
+        && existsAfter(/databases/$(database)/documents/dailyAwards/$(guardId(request.resource.data.studentId, request.resource.data.dateKey, 'DAILY_CHALLENGE')));
+
+      // Immutable audit trail: nobody edits or deletes a transaction once written.
+      allow update, delete: if false;
+    }
+
+    // ---------- dailyAwards (deterministic-ID guard docs; THIS is what
+    // makes duplicate awards structurally impossible, independent of
+    // application logic) ----------
+
+    match /dailyAwards/{awardId} {
+      allow read: if isSignedIn();
+
+      // Teacher SAFE/KIND/RESPONSIBLE guard. Can only ever be created
+      // once per studentId+dateKey+category thanks to !exists() below —
+      // Firestore document creation is atomic, so two simultaneous
+      // writers can't both win.
+      allow create: if isTeacher()
+        && !exists(/databases/$(database)/documents/dailyAwards/$(awardId))
+        && request.resource.data.category in teacherCategories()
+        && request.resource.data.teacherId == request.auth.uid
+        && awardId == guardId(request.resource.data.studentId, request.resource.data.dateKey, request.resource.data.category)
+        && isValidDateKeyForNow(request.resource.data.dateKey);
+
+      // Daily Challenge guard. This is the answer-correctness check: the
+      // write only succeeds if `selectedAnswer` matches the correct
+      // answer stored in the otherwise-unreadable dailyChallengeAnswers
+      // doc. get() inside a rule can read a document regardless of that
+      // document's own `allow read` rule, so the correct answer is never
+      // exposed to the student's client — only compared server-side.
+      allow create: if isStudent()
+        && !exists(/databases/$(database)/documents/dailyAwards/$(awardId))
+        && request.resource.data.category == 'DAILY_CHALLENGE'
+        && request.resource.data.studentId == request.auth.uid
+        && awardId == guardId(request.resource.data.studentId, request.resource.data.dateKey, 'DAILY_CHALLENGE')
+        && isValidDateKeyForNow(request.resource.data.dateKey)
+        && request.resource.data.selectedAnswer ==
+             get(/databases/$(database)/documents/dailyChallengeAnswers/$(request.resource.data.questionId)).data.correctAnswer;
+
+      allow update, delete: if false;
+    }
+
+    // ---------- Daily Challenge question pool ----------
+
+    match /dailyChallengeQuestions/{qId} {
+      // Everyone signed in can read question text/choices — but NOT the
+      // separate answers collection below.
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /dailyChallengeAnswers/{qId} {
+      // Never readable by students/teachers, even directly via the SDK —
+      // only admins can read this collection. Rule `get()` calls above
+      // bypass this for validation purposes only, per Firestore's design.
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // ---------- dailyChallengeAttempts (lightweight per-student progress
+    // tracker; NOT what gates points — dailyAwards does that) ----------
+
+    match /dailyChallengeAttempts/{attemptId} {
+      allow read: if isSignedIn() && (isAdmin() || resource.data.studentId == request.auth.uid);
+      allow create, update: if isStudent()
+        && request.resource.data.studentId == request.auth.uid
+        && isValidDateKeyForNow(request.resource.data.dateKey);
+      allow delete: if false;
+    }
+
+    // ---------- dailyChallengeLog (audit trail of correct/incorrect
+    // attempts, for admin reporting) ----------
+
+    match /dailyChallengeLog/{logId} {
+      allow read: if isAdmin() || (isStudent() && resource.data.studentId == request.auth.uid);
+      allow create: if isStudent()
+        && request.resource.data.studentId == request.auth.uid
+        && isValidDateKeyForNow(request.resource.data.dateKey)
+        && request.resource.data.result in ['correct', 'incorrect'];
+      allow update, delete: if false;
+    }
+  }
+}
