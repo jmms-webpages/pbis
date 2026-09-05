@@ -44,15 +44,28 @@ git remote add origin https://github.com/YOUR-USERNAME/YOUR-REPO-NAME.git
 git push -u origin main
 ```
 
-## 4. Host the actual website
+## 4. Host it on GitHub Pages
 
-This repo builds to a folder of static files (`npm run build` → a `dist` folder) — any static host works. Pick whichever you're already comfortable with:
+1. **Edit `vite.config.js`** — find the `base:` line and replace `/YOUR-REPO-NAME/` with your actual repo name, e.g. `base: '/pbis-rewards/'`. Commit and push this change.
+2. **Add these as repository secrets** (GitHub repo → Settings → Secrets and variables → Actions → New repository secret) — these are the same values from Step 1, just living here instead of a local `.env.local`:
 
-- **Netlify** or **Vercel** — connect your GitHub repo through their website (sign in with GitHub, pick the repo), no CLI needed. Set the build command to `npm run build` and the output folder to `dist`. Add the same Firebase config values from Step 1 as environment variables in their dashboard (same names as in `.env.example`, e.g. `VITE_FIREBASE_API_KEY`). Once connected, every push to `main` redeploys automatically — that's the only "CI/CD" this project needs now.
-- **GitHub Pages** — works too, though it needs a small Vite config tweak for the base path; ask if you want to go this route and we'll set it up.
-- Your school/district's own web server — build locally (`npm run build`) and upload the contents of `dist` wherever static files are served from.
+   | Secret | Where to find it |
+   |---|---|
+   | `VITE_FIREBASE_API_KEY` | Firebase Console → Project Settings → General → Your apps |
+   | `VITE_FIREBASE_AUTH_DOMAIN` | same page |
+   | `VITE_FIREBASE_PROJECT_ID` | same page |
+   | `VITE_FIREBASE_STORAGE_BUCKET` | same page |
+   | `VITE_FIREBASE_MESSAGING_SENDER_ID` | same page |
+   | `VITE_FIREBASE_APP_ID` | same page |
+   | `VITE_SCHOOL_GOOGLE_DOMAINS` | your Workspace domain(s), comma-separated |
 
-Whichever you choose, add its domain to Firebase Console → **Authentication → Settings → Authorized domains**, or Google Sign-In will refuse to work there.
+3. **Turn on Pages** — repo → Settings → Pages → under "Build and deployment", set **Source** to **GitHub Actions** (not "Deploy from a branch" — the workflow in this repo handles the build itself).
+4. Push to `main` (or re-push after Step 1's edit). Check the **Actions** tab to watch it build and deploy — when it finishes, your site is live at `https://YOUR-USERNAME.github.io/YOUR-REPO-NAME/`.
+5. Copy that `github.io` part (just the domain, not the path) into Firebase Console → **Authentication → Settings → Authorized domains** → Add domain → `YOUR-USERNAME.github.io`. Google Sign-In will silently fail until you do this.
+
+From here on, every push to `main` rebuilds and redeploys automatically — that's the only "CI/CD" this project needs.
+
+*(If you'd rather use Netlify or Vercel instead, they work too — same repo, same secrets as environment variables in their dashboard, no code changes needed on their side. Just skip the `vite.config.js` edit and the HashRouter is harmless either way.)*
 
 ## 5. Provision your first admin
 
