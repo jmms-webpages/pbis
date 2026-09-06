@@ -16,18 +16,21 @@ import { db } from '../lib/firebase';
 import {
   awardTeacherPoints,
   awardTeacherPointsBulk,
+  awardWorkCompletionBulk,
   PER_STUDENT_CATEGORIES,
   WHOLE_CLASS_CATEGORIES,
 } from '../lib/pbis';
 import { generateClassCode } from '../lib/classCode';
 import { getTodayDateKey } from '../lib/dateKey';
 
-export default function ClassRoster({ classData, teacherId }) {
+export default function ClassRoster({ classData, teacherId, teacherName }) {
   const [students, setStudents] = useState([]); // {id, displayName, ...}
   const [todayAwards, setTodayAwards] = useState({}); // studentId -> Set(category)
   const [selected, setSelected] = useState(new Set());
   const [showAddStudents, setShowAddStudents] = useState(false);
   const [confirmBulk, setConfirmBulk] = useState(null); // { category, scope: 'selected' | 'class' }
+  const [confirmSingle, setConfirmSingle] = useState(null); // { studentId, studentName, category }
+  const [commentText, setCommentText] = useState('');
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
   const dateKey = getTodayDateKey();
@@ -61,20 +64,23 @@ export default function ClassRoster({ classData, teacherId }) {
   }, [classData.studentIds]);
 
   // Load today's award guard docs for everyone in this roster, so buttons
-  // reflect school-wide state (any teacher, any class, any of the six
-  // categories) not just this class.
+  // reflect school-wide state (any teacher, any class) not just this
+  // class. WORK_COMPLETION is excluded — it's uncapped and never creates
+  // a guard doc, so there's nothing to check for it.
   useEffect(() => {
     async function loadAwards() {
       if (students.length === 0) {
         setTodayAwards({});
         return;
       }
-      const allCategories = [...PER_STUDENT_CATEGORIES, ...WHOLE_CLASS_CATEGORIES];
+      const cappedCategories = [...PER_STUDENT_CATEGORIES, ...WHOLE_CLASS_CATEGORIES].filter(
+        (c) => c.id !== 'WORK_COMPLETION'
+      );
       const map = {};
       await Promise.all(
         students.map(async (s) => {
           const results = await Promise.all(
-            allCategories.map(async (c) => {
+            cappedCategories.map(async (c) => {
               const snap = await getDocs(
                 query(
                   collection(db, 'dailyAwards'),
@@ -109,45 +115,69 @@ export default function ClassRoster({ classData, teacherId }) {
     setSelected(allSelected ? new Set() : new Set(students.map((s) => s.id)));
   };
 
-  const handleSingleAward = async (studentId, category) => {
+  const handleConfirmSingle = async () => {
+    if (!confirmSingle) return;
     setBusy(true);
     try {
-      await awardTeacherPoints({ studentId, category, teacherId, classId: classData.id });
+      await awardTeacherPoints({
+        studentId: confirmSingle.studentId,
+        category: confirmSingle.category,
+        teacherId,
+        teacherName,
+        classId: classData.id,
+        comment: commentText,
+      });
       setTodayAwards((prev) => ({
         ...prev,
-        [studentId]: new Set([...(prev[studentId] || []), category]),
+        [confirmSingle.studentId]: new Set([...(prev[confirmSingle.studentId] || []), confirmSingle.category]),
       }));
     } catch (e) {
       if (!String(e.message).startsWith('ALREADY_AWARDED')) console.error(e);
     } finally {
       setBusy(false);
+      setConfirmSingle(null);
+      setCommentText('');
     }
   };
 
   // For the confirmation dialog: how many students would actually receive
-  // this award (excludes anyone already awarded that category today).
+  // this award. WORK_COMPLETION has no cap, so everyone in scope is
+  // always eligible; capped categories exclude anyone already awarded
+  // that category today.
   const eligibleIds = useMemo(() => {
     if (!confirmBulk) return [];
     const pool = confirmBulk.scope === 'class' ? students.map((s) => s.id) : [...selected];
+    if (confirmBulk.category === 'WORK_COMPLETION') return pool;
     return pool.filter((id) => !todayAwards[id]?.has(confirmBulk.category));
   }, [confirmBulk, selected, students, todayAwards]);
 
   const handleConfirmBulk = async () => {
     setBusy(true);
     try {
-      const result = await awardTeacherPointsBulk({
-        studentIds: eligibleIds,
-        category: confirmBulk.category,
-        teacherId,
-        classId: classData.id,
-      });
-      setTodayAwards((prev) => {
-        const next = { ...prev };
-        result.awarded.forEach((id) => {
-          next[id] = new Set([...(next[id] || []), confirmBulk.category]);
+      const result =
+        confirmBulk.category === 'WORK_COMPLETION'
+          ? await awardWorkCompletionBulk({
+              studentIds: eligibleIds,
+              teacherId,
+              classId: classData.id,
+            })
+          : await awardTeacherPointsBulk({
+              studentIds: eligibleIds,
+              category: confirmBulk.category,
+              teacherId,
+              teacherName,
+              classId: classData.id,
+              comment: commentText,
+            });
+      if (confirmBulk.category !== 'WORK_COMPLETION') {
+        setTodayAwards((prev) => {
+          const next = { ...prev };
+          result.awarded.forEach((id) => {
+            next[id] = new Set([...(next[id] || []), confirmBulk.category]);
+          });
+          return next;
         });
-        return next;
-      });
+      }
       const label =
         [...PER_STUDENT_CATEGORIES, ...WHOLE_CLASS_CATEGORIES].find((c) => c.id === confirmBulk.category)?.label ||
         confirmBulk.category;
@@ -156,6 +186,7 @@ export default function ClassRoster({ classData, teacherId }) {
     } finally {
       setBusy(false);
       setConfirmBulk(null);
+      setCommentText('');
     }
   };
 
@@ -238,7 +269,7 @@ export default function ClassRoster({ classData, teacherId }) {
                     <button
                       key={c.id}
                       disabled={already || busy}
-                      onClick={() => handleSingleAward(s.id, c.id)}
+                      onClick={() => setConfirmSingle({ studentId: s.id, studentName: s.displayName, category: c.id })}
                       className="rounded-lg bg-plum-700 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-plum-800 disabled:cursor-not-allowed disabled:bg-plum-100 disabled:text-plum-400"
                     >
                       {c.label} {already ? '✓' : '+5'}
@@ -269,11 +300,25 @@ export default function ClassRoster({ classData, teacherId }) {
               {confirmBulk.scope === 'class'
                 ? `Every student currently in ${classData.className} will receive 5 points.`
                 : 'Each selected student will receive 5 points.'}{' '}
-              Anyone already awarded this today is skipped automatically.
+              {confirmBulk.category === 'WORK_COMPLETION'
+                ? "Work Completion has no daily limit, so this applies even if you've already given it today."
+                : 'Anyone already awarded this today is skipped automatically.'}
             </p>
+            {PER_STUDENT_CATEGORIES.some((c) => c.id === confirmBulk.category) && (
+              <textarea
+                value={commentText}
+                onChange={(e) => setCommentText(e.target.value)}
+                placeholder="Why? (optional — shown to these students)"
+                rows={2}
+                className="input mt-3"
+              />
+            )}
             <div className="mt-6 flex gap-2">
               <button
-                onClick={() => setConfirmBulk(null)}
+                onClick={() => {
+                  setConfirmBulk(null);
+                  setCommentText('');
+                }}
                 className="flex-1 rounded-xl border border-plum-200 py-2.5 text-sm font-medium text-plum-700"
               >
                 Cancel
@@ -284,6 +329,44 @@ export default function ClassRoster({ classData, teacherId }) {
                 className="flex-1 rounded-xl bg-plum-700 py-2.5 text-sm font-medium text-white hover:bg-plum-800 disabled:opacity-50"
               >
                 {busy ? 'Awarding…' : 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmSingle && (
+        <div className="fixed inset-0 z-20 flex items-center justify-center bg-plum-900/50 px-4">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl">
+            <h3 className="font-display text-lg font-semibold text-plum-900">
+              Give {PER_STUDENT_CATEGORIES.find((c) => c.id === confirmSingle.category)?.label} to{' '}
+              {confirmSingle.studentName}?
+            </h3>
+            <p className="mt-2 text-sm text-plum-700/70">They'll receive 5 points.</p>
+            <textarea
+              autoFocus
+              value={commentText}
+              onChange={(e) => setCommentText(e.target.value)}
+              placeholder="Why? (optional — shown to this student)"
+              rows={2}
+              className="input mt-3"
+            />
+            <div className="mt-6 flex gap-2">
+              <button
+                onClick={() => {
+                  setConfirmSingle(null);
+                  setCommentText('');
+                }}
+                className="flex-1 rounded-xl border border-plum-200 py-2.5 text-sm font-medium text-plum-700"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmSingle}
+                disabled={busy}
+                className="flex-1 rounded-xl bg-plum-700 py-2.5 text-sm font-medium text-white hover:bg-plum-800 disabled:opacity-50"
+              >
+                {busy ? 'Awarding…' : 'Give points'}
               </button>
             </div>
           </div>
