@@ -23,11 +23,23 @@
  */
 
 export function getTodayDateKey() {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  const d = String(now.getDate()).padStart(2, '0');
+  return formatDateKey(new Date());
+}
+
+function formatDateKey(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+}
+
+// dateKey strings sort lexicographically exactly like calendar order, so
+// "30 days ago" is just today's date minus 30 days, formatted the same
+// way — no timezone math needed beyond what Date() already does locally.
+export function getDateKeyDaysAgo(days) {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return formatDateKey(d);
 }
 
 export function formatDateKeyForDisplay(dateKey) {
