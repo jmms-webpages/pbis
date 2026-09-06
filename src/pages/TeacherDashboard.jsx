@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { collection, doc, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../context/AuthContext';
 import AppShell from '../components/AppShell';
@@ -9,8 +9,9 @@ import ClassRoster from '../components/ClassRoster';
 import NewClassModal from '../components/NewClassModal';
 
 export default function TeacherDashboard() {
-  const { firebaseUser, profile } = useAuth();
+  const { firebaseUser } = useAuth();
   const [classes, setClasses] = useState([]);
+  const [teacherProfile, setTeacherProfile] = useState(null);
   const [view, setView] = useState('dashboard'); // 'dashboard' | classId
   const [showNewClass, setShowNewClass] = useState(false);
 
@@ -22,8 +23,19 @@ export default function TeacherDashboard() {
     return unsub;
   }, [firebaseUser.uid]);
 
+  useEffect(() => {
+    // gradeLevels lives on teachers/{uid}, not users/{uid} — this was
+    // previously (incorrectly) read off the auth profile, which meant it
+    // was always empty and silently fell back to showing all three
+    // grades regardless of what the teacher actually teaches.
+    const unsub = onSnapshot(doc(db, 'teachers', firebaseUser.uid), (snap) => {
+      setTeacherProfile(snap.exists() ? snap.data() : null);
+    });
+    return unsub;
+  }, [firebaseUser.uid]);
+
   const activeClass = classes.find((c) => c.id === view);
-  const teacherGrades = profile?.gradeLevels?.length ? profile.gradeLevels : [6, 7, 8];
+  const teacherGrades = teacherProfile?.gradeLevels?.length ? teacherProfile.gradeLevels : [6, 7, 8];
 
   return (
     <AppShell title="PBIS Rewards — Teacher">
