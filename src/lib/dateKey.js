@@ -33,7 +33,6 @@ function formatDateKey(date) {
   return `${y}-${m}-${d}`;
 }
 
-
 // dateKey strings sort lexicographically exactly like calendar order, so
 // "30 days ago" is just today's date minus 30 days, formatted the same
 // way — no timezone math needed beyond what Date() already does locally.
