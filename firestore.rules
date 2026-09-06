@@ -79,7 +79,7 @@ service cloud.firestore {
     // that gives a friendlier error before this rule would reject it.
     function isAllowedSchoolEmail() {
       let domain = request.auth.token.email.split('@')[1];
-      return domain in ['jackson.sparcc.org', 'bearkworks.jackson.sparcc.org'];
+      return domain in ['jackson.sparcc.org', 'bearworks.jackson.sparcc.org', 'gmail.com'];
     }
 
     match /users/{uid} {
