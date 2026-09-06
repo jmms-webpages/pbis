@@ -3,6 +3,7 @@ import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { getDateKeyDaysAgo } from '../lib/dateKey';
 
+
 const CATEGORY_LABEL = { SAFE: 'Safe', KIND: 'Kind', RESPONSIBLE: 'Responsible' };
 const CATEGORY_COLOR = { SAFE: 'bg-plum-500', KIND: 'bg-gold-400', RESPONSIBLE: 'bg-plum-700' };
 
