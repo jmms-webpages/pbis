@@ -6,12 +6,14 @@ import AppShell from '../components/AppShell';
 import Leaderboard from '../components/Leaderboard';
 import DailyChallenge from '../components/DailyChallenge';
 import JoinClassModal from '../components/JoinClassModal';
+import CommentHistory from '../components/CommentHistory';
 import { getTodayDateKey } from '../lib/dateKey';
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'challenge', label: 'Daily Challenge' },
   { id: 'leaderboards', label: 'Leaderboards' },
+  { id: 'comments', label: 'Comments' },
 ];
 
 export default function StudentDashboard() {
@@ -108,6 +110,8 @@ export default function StudentDashboard() {
           <Leaderboard grade={null} title="School-wide — Top 25" highlightUid={firebaseUser.uid} />
         </div>
       )}
+
+      {tab === 'comments' && <CommentHistory studentId={firebaseUser.uid} />}
 
       {showJoinClass && (
         <JoinClassModal onClose={() => setShowJoinClass(false)} onJoined={() => setShowJoinClass(false)} />
