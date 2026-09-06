@@ -5,9 +5,9 @@ import { useAuth } from '../context/AuthContext';
 import AppShell from '../components/AppShell';
 import TeacherSidebar from '../components/TeacherSidebar';
 import Leaderboard from '../components/Leaderboard';
+import GradeTotalsPanel from '../components/GradeTotalsPanel';
 import ClassRoster from '../components/ClassRoster';
 import NewClassModal from '../components/NewClassModal';
-
 
 export default function TeacherDashboard() {
   const { firebaseUser } = useAuth();
@@ -59,6 +59,9 @@ export default function TeacherDashboard() {
                   {teacherGrades.length > 1 ? 's' : ''} and school-wide.
                 </p>
               </div>
+
+              <GradeTotalsPanel />
+
               <div className="grid gap-4 sm:grid-cols-2">
                 {teacherGrades.map((g) => (
                   <Leaderboard key={g} grade={g} title={`${g}th Grade — Top 25`} />
@@ -68,7 +71,9 @@ export default function TeacherDashboard() {
             </div>
           )}
 
-          {activeClass && <ClassRoster classData={activeClass} teacherId={firebaseUser.uid} />}
+          {activeClass && (
+            <ClassRoster classData={activeClass} teacherId={firebaseUser.uid} teacherName={firebaseUser.displayName} />
+          )}
 
           {view !== 'dashboard' && !activeClass && (
             <div className="rounded-2xl bg-white p-8 text-center shadow-card">
