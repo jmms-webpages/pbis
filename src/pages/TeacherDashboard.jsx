@@ -9,6 +9,7 @@ import GradeTotalsPanel from '../components/GradeTotalsPanel';
 import ClassRoster from '../components/ClassRoster';
 import NewClassModal from '../components/NewClassModal';
 
+
 export default function TeacherDashboard() {
   const { firebaseUser } = useAuth();
   const [classes, setClasses] = useState([]);
