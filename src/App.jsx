@@ -9,6 +9,7 @@ import StudentDashboard from './pages/StudentDashboard';
 import TeacherDashboard from './pages/TeacherDashboard';
 import AdminTeacherSwitcher from './components/AdminTeacherSwitcher';
 
+
 function Home() {
   const { role } = useAuth();
   if (role === 'admin') return <AdminTeacherSwitcher />;
