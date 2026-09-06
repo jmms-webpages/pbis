@@ -9,6 +9,7 @@ import JoinClassModal from '../components/JoinClassModal';
 import CommentHistory from '../components/CommentHistory';
 import { getTodayDateKey } from '../lib/dateKey';
 
+
 const TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'challenge', label: 'Daily Challenge' },
