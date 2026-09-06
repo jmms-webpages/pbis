@@ -63,23 +63,28 @@ export const WHOLE_CLASS_CATEGORIES = [
   { id: 'ON_TASK', label: 'On Task / Productive' },
 ];
 
-const TEACHER_AWARDABLE_CATEGORIES = [...PER_STUDENT_CATEGORIES, ...WHOLE_CLASS_CATEGORIES].map((c) => c.id);
+const CAPPED_TEACHER_CATEGORIES = PER_STUDENT_CATEGORIES.concat(
+  WHOLE_CLASS_CATEGORIES.filter((c) => c.id !== 'WORK_COMPLETION')
+).map((c) => c.id);
 
 /**
- * Awards a SAFE/KIND/RESPONSIBLE point to one student from a teacher's
- * class. Throws if already awarded today (by ANY teacher — the guard doc
- * ID has no teacherId in it, which is what makes this school-wide rather
- * than per-teacher, per the spec).
+ * Awards one of the five once-per-student-per-day capped categories
+ * (SAFE/KIND/RESPONSIBLE/ALL_BADGES/ON_TASK). Throws if already awarded
+ * today (by ANY teacher — the guard doc ID has no teacherId in it, which
+ * is what makes this school-wide rather than per-teacher, per the spec).
+ * For WORK_COMPLETION, use awardWorkCompletion() instead — it's
+ * deliberately uncapped and has no guard doc at all.
  */
-export async function awardTeacherPoints({ studentId, category, teacherId, classId }) {
-  if (!TEACHER_AWARDABLE_CATEGORIES.includes(category)) {
-    throw new Error('Invalid category for teacher award');
+export async function awardTeacherPoints({ studentId, category, teacherId, teacherName, classId, comment }) {
+  if (!CAPPED_TEACHER_CATEGORIES.includes(category)) {
+    throw new Error('Invalid category for capped teacher award');
   }
   const dateKey = getTodayDateKey();
   const points = CATEGORY_POINTS[category];
   const guardRef = doc(db, 'dailyAwards', `${studentId}_${dateKey}_${category}`);
   const ledgerRef = doc(collection(db, 'pointTransactions'));
   const studentRef = doc(db, 'students', studentId);
+  const trimmedComment = comment?.trim() || null;
 
   await runTransaction(db, async (tx) => {
     const guardSnap = await tx.get(guardRef);
@@ -100,8 +105,14 @@ export async function awardTeacherPoints({ studentId, category, teacherId, class
       category,
       source: 'TEACHER',
       teacherId,
+      teacherName: teacherName || null,
       classId,
       dateKey,
+      // Only ever set when the teacher actually typed something — kept
+      // out of the doc entirely otherwise rather than stored as an empty
+      // string, so "has a comment" is a simple truthiness check anywhere
+      // this is read later.
+      ...(trimmedComment ? { comment: trimmedComment } : {}),
       timestamp: serverTimestamp(),
     });
     tx.update(studentRef, {
@@ -118,17 +129,48 @@ export async function awardTeacherPoints({ studentId, category, teacherId, class
 }
 
 /**
+ * Awards Work Completion — the one category with NO daily cap. There's
+ * no guard doc at all here; instead, the students/{uid} update ties
+ * itself to this exact new ledger entry via firestore.rules' getAfter(),
+ * which is what stops it from being awardable to a student the teacher
+ * doesn't actually teach, even without a once-per-day limit.
+ */
+export async function awardWorkCompletion({ studentId, teacherId, classId }) {
+  const dateKey = getTodayDateKey();
+  const ledgerRef = doc(collection(db, 'pointTransactions'));
+  const studentRef = doc(db, 'students', studentId);
+
+  await runTransaction(db, async (tx) => {
+    tx.set(ledgerRef, {
+      studentId,
+      points: CATEGORY_POINTS.WORK_COMPLETION,
+      category: 'WORK_COMPLETION',
+      source: 'TEACHER',
+      teacherId,
+      classId,
+      dateKey,
+      timestamp: serverTimestamp(),
+    });
+    tx.update(studentRef, {
+      totalPoints: increment(CATEGORY_POINTS.WORK_COMPLETION),
+      workCompletionCount: increment(1),
+      lastLedgerId: ledgerRef.id,
+    });
+  });
+}
+
+/**
  * Awards points to a batch of students at once. Runs each student as its
  * own transaction (Firestore transactions are limited in scope/size, and
  * we want one student's success/failure to be independent of another's).
  * Returns a summary so the UI can report "22 awarded, 2 already had it
  * today" instead of failing the whole batch on one collision.
  */
-export async function awardTeacherPointsBulk({ studentIds, category, teacherId, classId }) {
+export async function awardTeacherPointsBulk({ studentIds, category, teacherId, teacherName, classId, comment }) {
   const results = { awarded: [], alreadyAwarded: [], failed: [] };
   for (const studentId of studentIds) {
     try {
-      await awardTeacherPoints({ studentId, category, teacherId, classId });
+      await awardTeacherPoints({ studentId, category, teacherId, teacherName, classId, comment });
       results.awarded.push(studentId);
     } catch (e) {
       if (String(e.message).startsWith('ALREADY_AWARDED')) {
@@ -137,6 +179,25 @@ export async function awardTeacherPointsBulk({ studentIds, category, teacherId, 
         console.error('Award failed for', studentId, e);
         results.failed.push(studentId);
       }
+    }
+  }
+  return results;
+}
+
+/**
+ * Bulk version of awardWorkCompletion — every student in the list gets
+ * credited, every time this is called, with no "already awarded today"
+ * filtering (there's nothing to filter — it's uncapped).
+ */
+export async function awardWorkCompletionBulk({ studentIds, teacherId, classId }) {
+  const results = { awarded: [], failed: [] };
+  for (const studentId of studentIds) {
+    try {
+      await awardWorkCompletion({ studentId, teacherId, classId });
+      results.awarded.push(studentId);
+    } catch (e) {
+      console.error('Work Completion award failed for', studentId, e);
+      results.failed.push(studentId);
     }
   }
   return results;
