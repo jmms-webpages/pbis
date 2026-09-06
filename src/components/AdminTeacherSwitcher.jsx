@@ -6,6 +6,7 @@ import AdminDashboard from '../pages/AdminDashboard';
 import TeacherDashboard from '../pages/TeacherDashboard';
 import BecomeTeacherSetup from './BecomeTeacherSetup';
 
+
 export default function AdminTeacherSwitcher() {
   const { firebaseUser } = useAuth();
   const [viewMode, setViewMode] = useState('admin'); // 'admin' | 'teacher'
