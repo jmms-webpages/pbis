@@ -10,6 +10,8 @@ const CATEGORY_LABEL = {
   WORK_COMPLETION: 'Work Completion',
   ALL_BADGES: 'All Badges',
   ON_TASK: 'On Task',
+  DAILY_CHALLENGE: 'Daily Challenge',
+  ADMIN_ADJUSTMENT: 'Adjustment',
 };
 
 const CATEGORY_COLOR = {
@@ -19,16 +21,19 @@ const CATEGORY_COLOR = {
   WORK_COMPLETION: 'bg-emerald-600 text-white',
   ALL_BADGES: 'bg-purple-600 text-white',
   ON_TASK: 'bg-blue-600 text-white',
+  DAILY_CHALLENGE: 'bg-amber-600 text-white',
+  ADMIN_ADJUSTMENT: 'bg-plum-800 text-white',
 };
 
 /**
- * Shows the student's own comment history — only entries where a
- * teacher wrote a comment, within the last 30 days.
+ * Shows the student's own comment history — entries where a teacher
+ * wrote a comment or an administrator made an adjustment with a reason,
+ * within the last 30 days.
  *
  * Resilient Query: Queries by `where('studentId', '==', studentId)` alone.
  * This guarantees zero reliance on manual Firestore composite index creation
  * (which causes failed-precondition errors when combining == and >= on different fields).
- * The 30-day cutoff and comment filters are evaluated cleanly in JavaScript.
+ * The 30-day cutoff and comment/reason filters are evaluated cleanly in JavaScript.
  */
 export default function CommentHistory({ studentId }) {
   const [comments, setComments] = useState([]);
@@ -87,15 +92,21 @@ export default function CommentHistory({ studentId }) {
             data.timestamp?.toMillis?.() ||
             (data.dateKey ? new Date(data.dateKey + 'T12:00:00').getTime() : 0);
 
+          const displayText =
+            (typeof data.comment === 'string' && data.comment.trim()) ||
+            (typeof data.reason === 'string' && data.reason.trim()) ||
+            '';
+
           return {
             id: d.id,
             ...data,
+            displayText,
             formattedDate,
             timestampMillis,
           };
         })
         .filter((t) => {
-          if (!t.comment || typeof t.comment !== 'string' || !t.comment.trim()) {
+          if (!t.displayText) {
             return false;
           }
           // Filter within 30 days if dateKey is present
@@ -143,7 +154,7 @@ export default function CommentHistory({ studentId }) {
   if (comments.length === 0) {
     return (
       <div className="rounded-2xl bg-white p-6 text-center shadow-card">
-        <p className="text-plum-700">No comments from the last 30 days yet.</p>
+        <p className="text-plum-700">No comments or adjustments from the last 30 days yet.</p>
         <button
           onClick={() => load(true)}
           className="mt-3 text-xs font-medium text-plum-600 hover:text-plum-800 underline"
@@ -165,26 +176,52 @@ export default function CommentHistory({ studentId }) {
         </button>
       </div>
       <ul className="space-y-3">
-        {comments.map((c) => (
-          <li key={c.id} className="rounded-2xl bg-white p-4 shadow-card">
-            <div className="flex items-center gap-2">
-              <span
-                className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-                  CATEGORY_COLOR[c.category] || 'bg-plum-600 text-white'
-                }`}
-              >
-                {CATEGORY_LABEL[c.category] || c.category || 'Award'}
-              </span>
-              {c.formattedDate && (
-                <span className="text-xs text-plum-700/50">
-                  {c.formattedDate}
-                </span>
+        {comments.map((c) => {
+          const isAdminAdjustment = c.source === 'ADMIN' || c.category === 'ADMIN_ADJUSTMENT';
+          const pointsDelta = typeof c.points === 'number' ? c.points : null;
+          const authorText =
+            c.teacherName ||
+            c.adminName ||
+            (isAdminAdjustment ? 'Administrator' : null);
+
+          return (
+            <li key={c.id} className="rounded-2xl bg-white p-4 shadow-card">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                      isAdminAdjustment
+                        ? 'bg-plum-800 text-white'
+                        : CATEGORY_COLOR[c.category] || 'bg-plum-600 text-white'
+                    }`}
+                  >
+                    {isAdminAdjustment
+                      ? `Adjustment (${CATEGORY_LABEL[c.category] || 'General'})`
+                      : CATEGORY_LABEL[c.category] || c.category || 'Award'}
+                  </span>
+                  {c.formattedDate && (
+                    <span className="text-xs text-plum-700/50">
+                      {c.formattedDate}
+                    </span>
+                  )}
+                </div>
+                {pointsDelta !== null && (
+                  <span
+                    className={`text-xs font-bold ${
+                      pointsDelta >= 0 ? 'text-green-700' : 'text-red-700'
+                    }`}
+                  >
+                    {pointsDelta > 0 ? `+${pointsDelta}` : pointsDelta} pts
+                  </span>
+                )}
+              </div>
+              <p className="mt-2 text-sm text-plum-900">{c.displayText}</p>
+              {authorText && (
+                <p className="mt-1 text-xs text-plum-700/50">— {authorText}</p>
               )}
-            </div>
-            <p className="mt-2 text-sm text-plum-900">{c.comment}</p>
-            {c.teacherName && <p className="mt-1 text-xs text-plum-700/50">— {c.teacherName}</p>}
-          </li>
-        ))}
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

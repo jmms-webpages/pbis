@@ -25,7 +25,7 @@ export default function AdminDashboard() {
     <AppShell title="PBIS Rewards — Admin" tabs={TABS} activeTab={tab} onTabChange={setTab}>
       {tab === 'students' && <StudentsTab />}
       {tab === 'reports' && <ReportsTab />}
-      {tab === 'adjust' && <AdjustPointsTab adminId={profile.id} />}
+      {tab === 'adjust' && <AdjustPointsTab adminId={profile.id} adminName={profile.displayName || 'Administrator'} />}
       {tab === 'questions' && <QuestionsTab />}
       {tab === 'roster' && <RosterTab />}
       {tab === 'danger' && <DangerZoneTab />}

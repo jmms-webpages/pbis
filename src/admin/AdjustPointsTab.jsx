@@ -14,7 +14,7 @@ const CATEGORY_OPTIONS = [
   { value: 'DAILY_CHALLENGE', label: 'Daily Challenge correction' },
 ];
 
-export default function AdjustPointsTab({ adminId }) {
+export default function AdjustPointsTab({ adminId, adminName }) {
   const [students, setStudents] = useState([]);
   const [search, setSearch] = useState('');
   const [selectedStudent, setSelectedStudent] = useState(null);
@@ -50,6 +50,7 @@ export default function AdjustPointsTab({ adminId }) {
         category,
         reason,
         adminId,
+        adminName,
       });
       setStatus({ type: 'success', text: `Applied ${amt > 0 ? '+' : ''}${amt} points to ${selectedStudent.displayName}.` });
       setAmount('');

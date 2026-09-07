@@ -295,11 +295,12 @@ export async function submitDailyChallengeAnswer({ studentId, questionId, select
  * ADMIN_ADJUSTMENT-tagged corrections to avoid double-counting a
  * category that was already incremented by the original award.
  */
-export async function adminAdjustPoints({ studentId, amount, category, reason, adminId }) {
+export async function adminAdjustPoints({ studentId, amount, category, reason, adminId, adminName }) {
   if (!amount || !reason?.trim()) {
     throw new Error('Amount and reason are required');
   }
   const dateKey = getTodayDateKey();
+  const trimmedReason = reason.trim();
   const ledgerRef = doc(collection(db, 'pointTransactions'));
   const studentRef = doc(db, 'students', studentId);
 
@@ -310,7 +311,9 @@ export async function adminAdjustPoints({ studentId, amount, category, reason, a
       category: category || 'ADMIN_ADJUSTMENT',
       source: 'ADMIN',
       adminId,
-      reason: reason.trim(),
+      ...(adminName ? { adminName } : {}),
+      reason: trimmedReason,
+      comment: trimmedReason,
       dateKey,
       timestamp: serverTimestamp(),
     });
