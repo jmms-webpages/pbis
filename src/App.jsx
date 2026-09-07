@@ -18,8 +18,8 @@ function Home() {
 }
 
 function LoginRoute() {
-  const { firebaseUser, loading } = useAuth();
-  if (loading) return <Loading />;
+  const { firebaseUser, loading, signOut } = useAuth();
+  if (loading) return <Loading onReset={signOut} />;
   if (firebaseUser) return <Navigate to="/" replace />;
   return <Login />;
 }

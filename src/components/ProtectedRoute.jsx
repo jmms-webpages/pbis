@@ -9,11 +9,12 @@ import Loading from './Loading';
  * that the rules wouldn't already allow.
  */
 export default function ProtectedRoute({ allowedRoles, requireSetup = true, children }) {
-  const { firebaseUser, profile, loading } = useAuth();
+  const { firebaseUser, profile, loading, signOut } = useAuth();
 
-  if (loading) return <Loading />;
+  if (loading) return <Loading onReset={signOut} />;
   if (!firebaseUser) return <Navigate to="/login" replace />;
-  if (!profile) return <Loading label="Setting up your account" />;
+  if (!profile) return <Loading label="Setting up your account" onReset={signOut} />;
+
 
   if (allowedRoles && !allowedRoles.includes(profile.role)) {
     return <Navigate to="/" replace />;

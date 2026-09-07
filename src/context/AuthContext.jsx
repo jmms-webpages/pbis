@@ -153,11 +153,17 @@ export function AuthProvider({ children }) {
         // screen forever, since nothing ever called setLoading(false).
         // Now it signs out cleanly and surfaces a message instead.
         try {
-          const data = await bootstrapUserDocument(user);
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Connection timed out. Please check your network.')), 10000)
+          );
+          const data = await Promise.race([bootstrapUserDocument(user), timeoutPromise]);
           setProfile({ id: user.uid, ...data });
         } catch (e) {
           console.error('Sign-in setup failed', e);
-          setAuthError('Something went wrong setting up your account. Please try signing in again.');
+          const msg = e?.message?.includes('timed out')
+            ? 'Account setup timed out connecting to Firebase. Please try signing in again.'
+            : 'Something went wrong setting up your account. Please try signing in again.';
+          setAuthError(msg);
           await firebaseSignOut(auth);
           setFirebaseUser(null);
           setProfile(null);
