@@ -221,7 +221,9 @@ export default function DangerZoneTab() {
             <Item label="Daily Challenge log entries" value={preview.logCount} />
             <Item
               label="Class memberships"
-              value={preview.classes.length ? preview.classes.map((c) => c.className).join(', ') : 'None'}
+              value={
+                preview.classes?.length ? preview.classes.map((c) => c.className || '(untitled)').join(', ') : 'None'
+              }
             />
           </dl>
 
