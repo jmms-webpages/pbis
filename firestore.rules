@@ -44,6 +44,15 @@ service cloud.firestore {
     function teacherCategories() {
       return ['SAFE', 'KIND', 'RESPONSIBLE', 'WORK_COMPLETION', 'ALL_BADGES', 'ON_TASK'];
     }
+    // Subset of the above that's capped at once-per-student-per-day via
+    // the dailyAwards guard-doc mechanism. WORK_COMPLETION is
+    // deliberately excluded — a teacher can award it to a class as many
+    // times in a day as they like (e.g. after each of several
+    // assignments), so it never creates a guard doc at all; see its own
+    // dedicated rule branches below instead.
+    function cappedTeacherCategories() {
+      return ['SAFE', 'KIND', 'RESPONSIBLE', 'ALL_BADGES', 'ON_TASK'];
+    }
     function teacherCountField(category) {
       return category == 'SAFE' ? 'safeCount'
         : category == 'KIND' ? 'kindCount'
@@ -79,7 +88,7 @@ service cloud.firestore {
     // that gives a friendlier error before this rule would reject it.
     function isAllowedSchoolEmail() {
       let domain = request.auth.token.email.split('@')[1];
-      return domain in ['jackson.sparcc.org', 'bearworks.jackson.sparcc.org', 'gmail.com'];
+      return domain in ['jackson.sparcc.org', 'bearworks.jackson.sparcc.org'];
     }
 
     match /users/{uid} {
@@ -90,9 +99,12 @@ service cloud.firestore {
       // isAllowedSchoolEmail() above). Critically, the ROLE they claim is
       // validated here too, not trusted from the client: 'student' is
       // always allowed (no privilege), but 'teacher'/'admin' is only
-      // allowed if an admin already pre-provisioned a matching, unclaimed
-      // roster entry for this exact Google account email. Without this
-      // check, a client could otherwise just request role:'admin' directly.
+      // allowed if an admin already pre-provisioned a matching roster
+      // entry for this exact Google account email, and that entry is
+      // either unclaimed OR was already claimed by this SAME account
+      // (e.g. their users/{uid} doc was deleted and they're
+      // re-bootstrapping — this lets them recover their own role without
+      // opening a way for a different account to grab someone else's).
       allow create: if isSelf(uid)
         && isAllowedSchoolEmail()
         && request.resource.data.setupComplete == false
@@ -101,7 +113,10 @@ service cloud.firestore {
           || (
             request.resource.data.role in ['teacher', 'admin']
             && get(/databases/$(database)/documents/roster/$(request.auth.token.email)).data.role == request.resource.data.role
-            && get(/databases/$(database)/documents/roster/$(request.auth.token.email)).data.claimed == false
+            && (
+              get(/databases/$(database)/documents/roster/$(request.auth.token.email)).data.claimed == false
+              || get(/databases/$(database)/documents/roster/$(request.auth.token.email)).data.claimedBy == request.auth.uid
+            )
           )
         );
 
@@ -110,12 +125,19 @@ service cloud.firestore {
       allow update: if (isSelf(uid)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['setupComplete']))
         || isAdmin();
+
+      // Admin-only, for the Danger Zone test-account cleanup tool.
+      allow delete: if isAdmin();
     }
 
     // ---------- roster (admin pre-provisioning of staff roles) ----------
 
     match /roster/{email} {
-      allow read: if isAdmin();
+      // Admins can browse the whole roster; anyone else may only read
+      // their OWN entry (needed during first sign-in, to determine
+      // whether they're a pre-provisioned teacher/admin) — never another
+      // person's.
+      allow read: if isAdmin() || email == request.auth.token.email;
       // Only the account claiming ITS OWN roster entry may mark it
       // claimed — otherwise anyone could grief a colleague's entry by
       // marking it claimed before they ever sign in.
@@ -141,19 +163,20 @@ service cloud.firestore {
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['grade'])
             && request.resource.data.grade in [6, 7, 8])
 
-        // Teacher awards (SAFE/KIND/RESPONSIBLE, or a whole-class quick
-        // action like WORK_COMPLETION): totals may change ONLY as part of
-        // the exact same transaction that creates today's guard doc for
-        // this category. !exists() confirms the guard didn't exist before
-        // this transaction; existsAfter() confirms THIS transaction is the
-        // one creating it. A client can't satisfy both by calling this
-        // update in isolation — existsAfter() would be false because no
-        // sibling write in that call would have created the guard.
+        // Teacher awards (SAFE/KIND/RESPONSIBLE, or the whole-class
+        // ALL_BADGES/ON_TASK quick actions): totals may change ONLY as
+        // part of the exact same transaction that creates today's guard
+        // doc for this category. !exists() confirms the guard didn't
+        // exist before this transaction; existsAfter() confirms THIS
+        // transaction is the one creating it. A client can't satisfy both
+        // by calling this update in isolation — existsAfter() would be
+        // false because no sibling write in that call would have created
+        // the guard.
         // teacherCountField() picks out exactly one count field to check
         // — using bracket access (data[fieldName]) lets one rule branch
-        // cover all six teacher categories instead of one branch each.
+        // cover all five capped categories instead of one branch each.
         || (isTeacher()
-            && request.resource.data.lastAwardCategory in teacherCategories()
+            && request.resource.data.lastAwardCategory in cappedTeacherCategories()
             && request.resource.data.diff(resource.data).affectedKeys()
                  .hasOnly(['totalPoints', teacherCountField(request.resource.data.lastAwardCategory), 'lastAwardCategory', 'lastAwardDateKey'])
             && isValidDateKeyForNow(request.resource.data.lastAwardDateKey)
@@ -162,6 +185,22 @@ service cloud.firestore {
                  - resource.data[teacherCountField(request.resource.data.lastAwardCategory)] == 1
             && !exists(/databases/$(database)/documents/dailyAwards/$(guardId(uid, request.resource.data.lastAwardDateKey, request.resource.data.lastAwardCategory)))
             && existsAfter(/databases/$(database)/documents/dailyAwards/$(guardId(uid, request.resource.data.lastAwardDateKey, request.resource.data.lastAwardCategory))))
+
+        // Work Completion: NOT capped, so there's no guard doc to pair
+        // against. Instead, this update is only valid alongside a
+        // freshly-created (in this same transaction) pointTransactions
+        // ledger entry — getAfter() confirms that specific doc exists
+        // post-transaction and genuinely belongs to this student and
+        // this teacher, which is what stops an arbitrary teacher from
+        // crediting a student they don't actually teach. No dateKey or
+        // once-per-day check at all — this is intentionally repeatable.
+        || (isTeacher()
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['totalPoints', 'workCompletionCount', 'lastLedgerId'])
+            && request.resource.data.totalPoints - resource.data.totalPoints == 5
+            && request.resource.data.workCompletionCount - resource.data.workCompletionCount == 1
+            && getAfter(/databases/$(database)/documents/pointTransactions/$(request.resource.data.lastLedgerId)).data.category == 'WORK_COMPLETION'
+            && getAfter(/databases/$(database)/documents/pointTransactions/$(request.resource.data.lastLedgerId)).data.studentId == uid
+            && getAfter(/databases/$(database)/documents/pointTransactions/$(request.resource.data.lastLedgerId)).data.teacherId == request.auth.uid)
 
         // Daily Challenge: same pairing pattern, but the student updates
         // their own totals and it's tied to today's DAILY_CHALLENGE guard.
@@ -174,6 +213,9 @@ service cloud.firestore {
             && request.resource.data.dailyChallengeCount - resource.data.dailyChallengeCount == 1
             && !exists(/databases/$(database)/documents/dailyAwards/$(guardId(uid, request.resource.data.lastAwardDateKey, 'DAILY_CHALLENGE')))
             && existsAfter(/databases/$(database)/documents/dailyAwards/$(guardId(uid, request.resource.data.lastAwardDateKey, 'DAILY_CHALLENGE'))));
+
+      // Admin-only, for the Danger Zone test-account cleanup tool.
+      allow delete: if isAdmin();
     }
 
     // ---------- teachers ----------
@@ -196,7 +238,10 @@ service cloud.firestore {
       // resource/request data regardless of the read rule.
       allow read: if isAdmin() || (isTeacher() && resource.data.teacherId == request.auth.uid);
 
-      allow create: if isTeacher()
+      // Create: teachers create their own classes; admins may too (e.g.
+      // an admin who also teaches a class of their own), owning it under
+      // their own uid the same way a teacher would.
+      allow create: if (isTeacher() || isAdmin())
         && request.resource.data.teacherId == request.auth.uid
         && request.resource.data.joinable == true;
 
@@ -226,7 +271,7 @@ service cloud.firestore {
     match /classCodeIndex/{code} {
       allow read: if isSignedIn();
 
-      allow create: if isTeacher()
+      allow create: if (isTeacher() || isAdmin())
         && request.resource.data.teacherId == request.auth.uid
         && request.resource.data.active == true
         // getAfter(), not get(): the class doc is created in the SAME
@@ -259,24 +304,39 @@ service cloud.firestore {
         && request.resource.data.reason is string
         && request.resource.data.reason.size() > 0;
 
-      // Teacher awards: only for a student who is actually in a class this
-      // teacher owns, and only for the six teacher-awardable categories
-      // (three per-student, three whole-class quick actions).
-      // Paired to the SAME guard-doc creation via !exists()/existsAfter()
-      // so this ledger entry can only ever be written once per
-      // student+day+category, in lockstep with the guard doc and the
-      // cached-totals update — none of the three can happen without all
-      // three succeeding together in the same transaction.
-      allow create: if isTeacher()
+      // Teacher awards for the FIVE capped categories: only for a student
+      // actually in a class this teacher owns. Paired to the SAME
+      // guard-doc creation via !exists()/existsAfter() so this ledger
+      // entry can only ever be written once per student+day+category, in
+      // lockstep with the guard doc and the cached-totals update — none
+      // of the three can happen without all three succeeding together in
+      // the same transaction.
+      allow create: if (isTeacher() || isAdmin())
         && request.resource.data.source == 'TEACHER'
         && request.resource.data.teacherId == request.auth.uid
-        && request.resource.data.category in teacherCategories()
+        && request.resource.data.category in cappedTeacherCategories()
         && request.resource.data.points == 5
         && get(/databases/$(database)/documents/classes/$(request.resource.data.classId)).data.teacherId == request.auth.uid
         && request.resource.data.studentId in get(/databases/$(database)/documents/classes/$(request.resource.data.classId)).data.studentIds
         && isValidDateKeyForNow(request.resource.data.dateKey)
         && !exists(/databases/$(database)/documents/dailyAwards/$(guardId(request.resource.data.studentId, request.resource.data.dateKey, request.resource.data.category)))
         && existsAfter(/databases/$(database)/documents/dailyAwards/$(guardId(request.resource.data.studentId, request.resource.data.dateKey, request.resource.data.category)));
+
+      // Work Completion: same ownership checks (real class, real
+      // enrolled student) but deliberately NO guard-doc pairing — a
+      // teacher can create as many of these in a day as they like. The
+      // corresponding students/{uid} update rule ties itself to this
+      // exact ledger entry via getAfter() instead, which is what keeps
+      // this from being awardable to a student outside the teacher's
+      // class even without a daily cap.
+      allow create: if (isTeacher() || isAdmin())
+        && request.resource.data.source == 'TEACHER'
+        && request.resource.data.teacherId == request.auth.uid
+        && request.resource.data.category == 'WORK_COMPLETION'
+        && request.resource.data.points == 5
+        && get(/databases/$(database)/documents/classes/$(request.resource.data.classId)).data.teacherId == request.auth.uid
+        && request.resource.data.studentId in get(/databases/$(database)/documents/classes/$(request.resource.data.classId)).data.studentIds
+        && isValidDateKeyForNow(request.resource.data.dateKey);
 
       // Daily Challenge: same pairing — this ledger entry can only be
       // created in the same transaction that creates today's
@@ -291,8 +351,15 @@ service cloud.firestore {
         && !exists(/databases/$(database)/documents/dailyAwards/$(guardId(request.resource.data.studentId, request.resource.data.dateKey, 'DAILY_CHALLENGE')))
         && existsAfter(/databases/$(database)/documents/dailyAwards/$(guardId(request.resource.data.studentId, request.resource.data.dateKey, 'DAILY_CHALLENGE')));
 
-      // Immutable audit trail: nobody edits or deletes a transaction once written.
-      allow update, delete: if false;
+      // Immutable audit trail for everyone except admins — never
+      // updatable by anyone, but deletable by an admin specifically to
+      // support the "Danger Zone" test-account wipe tool. This is a
+      // deliberate, narrow exception: it means an admin CAN erase award
+      // history, which real accountability depends on never happening in
+      // practice. Reserve this for test/dummy accounts before launch,
+      // never for a real student's record.
+      allow update: if false;
+      allow delete: if isAdmin();
     }
 
     // ---------- dailyAwards (deterministic-ID guard docs; THIS is what
@@ -302,13 +369,15 @@ service cloud.firestore {
     match /dailyAwards/{awardId} {
       allow read: if isSignedIn();
 
-      // Teacher SAFE/KIND/RESPONSIBLE guard. Can only ever be created
-      // once per studentId+dateKey+category thanks to !exists() below —
-      // Firestore document creation is atomic, so two simultaneous
-      // writers can't both win.
-      allow create: if isTeacher()
+      // Teacher SAFE/KIND/RESPONSIBLE/ALL_BADGES/ON_TASK guard. Can only
+      // ever be created once per studentId+dateKey+category thanks to
+      // !exists() below — Firestore document creation is atomic, so two
+      // simultaneous writers can't both win. WORK_COMPLETION never
+      // reaches this rule at all (see cappedTeacherCategories()) — it
+      // has no guard doc, by design, since it's uncapped.
+      allow create: if (isTeacher() || isAdmin())
         && !exists(/databases/$(database)/documents/dailyAwards/$(awardId))
-        && request.resource.data.category in teacherCategories()
+        && request.resource.data.category in cappedTeacherCategories()
         && request.resource.data.teacherId == request.auth.uid
         && awardId == guardId(request.resource.data.studentId, request.resource.data.dateKey, request.resource.data.category)
         && isValidDateKeyForNow(request.resource.data.dateKey);
@@ -328,7 +397,10 @@ service cloud.firestore {
         && request.resource.data.selectedAnswer ==
              get(/databases/$(database)/documents/dailyChallengeAnswers/$(request.resource.data.questionId)).data.correctAnswer;
 
-      allow update, delete: if false;
+      // Update stays fully locked; delete is admin-only, for the same
+      // test-account cleanup reason as pointTransactions above.
+      allow update: if false;
+      allow delete: if isAdmin();
     }
 
     // ---------- Daily Challenge question pool ----------
@@ -356,7 +428,8 @@ service cloud.firestore {
       allow create, update: if isStudent()
         && request.resource.data.studentId == request.auth.uid
         && isValidDateKeyForNow(request.resource.data.dateKey);
-      allow delete: if false;
+      // Admin-only delete, for the Danger Zone test-account cleanup tool.
+      allow delete: if isAdmin();
     }
 
     // ---------- dailyChallengeLog (audit trail of correct/incorrect
@@ -368,7 +441,10 @@ service cloud.firestore {
         && request.resource.data.studentId == request.auth.uid
         && isValidDateKeyForNow(request.resource.data.dateKey)
         && request.resource.data.result in ['correct', 'incorrect'];
-      allow update, delete: if false;
+      // Update stays fully locked; delete is admin-only, for the Danger
+      // Zone test-account cleanup tool.
+      allow update: if false;
+      allow delete: if isAdmin();
     }
   }
 }
