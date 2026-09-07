@@ -1,24 +1,56 @@
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { isFirebaseConfigured, firebaseProjectId } from '../lib/firebase';
 
 export default function Login() {
   const { signIn, authError } = useAuth();
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [unauthorizedDomain, setUnauthorizedDomain] = useState(null);
+  const [copied, setCopied] = useState(false);
 
   const handleSignIn = async () => {
     setError('');
+    setUnauthorizedDomain(null);
+    if (!isFirebaseConfigured) {
+      setError('Firebase credentials are not yet configured. Please set your Firebase environment variables in Settings to sign in.');
+      return;
+    }
     setBusy(true);
     try {
       await signIn();
     } catch (e) {
-      console.error(e);
-      // Our own domain-check throws a specific, friendly message —
-      // anything else (popup closed, network error, etc.) falls back to
-      // a generic one.
+      const code = e?.code || '';
+      const message = e?.message || '';
+
+      if (code === 'auth/unauthorized-domain' || message.includes('unauthorized-domain')) {
+        const currentHost = window.location.hostname || 'ais-dev-y4ye2xxh7yk2fyt3pwre7h-276960982650.us-west1.run.app';
+        setUnauthorizedDomain(currentHost);
+        return;
+      }
+
+      if (code === 'auth/popup-closed-by-user') {
+        setError('The sign-in popup was closed before finishing. Please try again.');
+        return;
+      }
+
+      if (code === 'auth/popup-blocked') {
+        setError('The sign-in popup was blocked by your browser. Please allow popups for this site and try again.');
+        return;
+      }
+
+      if (code === 'auth/cancelled-popup-request') {
+        return;
+      }
+
+      if (code === 'auth/network-request-failed') {
+        setError('Network error connecting to Firebase. Please check your internet connection.');
+        return;
+      }
+
       setError(
-        e.message?.startsWith('Please sign in with your school')
-          ? e.message
+        message.startsWith('Please sign in with your school')
+          ? message
           : 'Sign-in did not go through. Use your school Google account and try again.'
       );
     } finally {
@@ -26,9 +58,21 @@ export default function Login() {
     }
   };
 
+  const handleCopy = () => {
+    if (unauthorizedDomain) {
+      navigator.clipboard?.writeText(unauthorizedDomain);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const consoleUrl = firebaseProjectId && firebaseProjectId !== 'placeholder-app'
+    ? `https://console.firebase.google.com/project/${firebaseProjectId}/authentication/settings`
+    : 'https://console.firebase.google.com/';
+
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-plum-900 px-6">
-      {/* Ambient gold arcs — a single deliberate decorative moment, not a generic gradient wash */}
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-plum-900 px-6 py-8">
+      {/* Ambient gold arcs */}
       <svg
         className="pointer-events-none absolute inset-0 h-full w-full opacity-40"
         viewBox="0 0 1200 800"
@@ -38,8 +82,8 @@ export default function Login() {
         <circle cx="120" cy="720" r="260" stroke="#8f5cc4" strokeWidth="1.5" fill="none" opacity="0.5" />
       </svg>
 
-      <div className="relative z-10 w-full max-w-sm rounded-2xl bg-paper p-8 shadow-2xl">
-        <div className="mb-8 text-center">
+      <div className="relative z-10 w-full max-w-md rounded-2xl bg-paper p-7 sm:p-8 shadow-2xl">
+        <div className="mb-6 text-center">
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-plum-700 font-display text-2xl font-semibold text-gold-300">
             P
           </div>
@@ -56,11 +100,71 @@ export default function Login() {
           {busy ? 'Signing in…' : 'Continue with Google'}
         </button>
 
-        {(error || authError) && (
+        {unauthorizedDomain && (
+          <div className="mt-5 rounded-xl border border-amber-300 bg-amber-50/90 p-4 text-left shadow-sm">
+            <div className="flex items-center gap-2">
+              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-xs font-bold text-white">
+                !
+              </span>
+              <h3 className="font-display text-sm font-semibold text-amber-950">
+                Authorize Domain in Firebase
+              </h3>
+            </div>
+            <p className="mt-2 text-xs leading-relaxed text-amber-900">
+              Firebase Authentication requires this domain to be added to your Authorized Domains list before Google Sign-In can complete:
+            </p>
+
+            <div className="mt-2.5 flex items-center gap-2 rounded-lg border border-amber-200 bg-white p-2 text-xs">
+              <code className="flex-1 truncate font-mono text-plum-900 select-all font-semibold">
+                {unauthorizedDomain}
+              </code>
+              <button
+                type="button"
+                onClick={handleCopy}
+                className="rounded-md bg-plum-100 px-2.5 py-1 text-xs font-medium text-plum-900 hover:bg-plum-200 transition"
+              >
+                {copied ? 'Copied!' : 'Copy'}
+              </button>
+            </div>
+
+            <ol className="mt-3 list-decimal space-y-1 pl-4 text-xs text-amber-900">
+              <li>
+                Open the{' '}
+                <a
+                  href={consoleUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-medium text-plum-800 underline hover:text-plum-950"
+                >
+                  Firebase Auth Settings ↗
+                </a>
+              </li>
+              <li>Under <strong>Authorized domains</strong>, click <strong>Add domain</strong></li>
+              <li>Paste the copied domain (or <code>run.app</code>) and click <strong>Done</strong></li>
+            </ol>
+
+            <button
+              type="button"
+              onClick={handleSignIn}
+              disabled={busy}
+              className="mt-3.5 w-full rounded-lg bg-plum-800 py-2 text-xs font-semibold text-white shadow hover:bg-plum-900 transition"
+            >
+              {busy ? 'Connecting…' : 'Try Signing In Again'}
+            </button>
+          </div>
+        )}
+
+        {(error || authError) && !unauthorizedDomain && (
           <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error || authError}</p>
         )}
 
-        <p className="mt-8 text-center text-xs text-plum-700/50">
+        {!isFirebaseConfigured && !unauthorizedDomain && (
+          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            Firebase configuration needed: Set your Firebase environment variables in Settings to connect your project.
+          </div>
+        )}
+
+        <p className="mt-7 text-center text-xs text-plum-700/50">
           Your role is assigned by your school — there's nothing to select here.
         </p>
       </div>

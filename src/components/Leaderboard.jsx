@@ -14,7 +14,22 @@ export default function Leaderboard({ grade, title, highlightUid }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const load = async () => {
+  const load = async (force = false) => {
+    const cacheKey = `pbis_leaderboard_${grade ?? 'all'}`;
+    if (!force) {
+      const cached = sessionStorage.getItem(cacheKey);
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached);
+          if (Date.now() - (parsed.time || 0) < 60 * 60 * 1000) {
+            setRows(parsed.rows || []);
+            setLoading(false);
+            return;
+          }
+        } catch {}
+      }
+    }
+
     setLoading(true);
     try {
       const base = collection(db, 'students');
@@ -22,7 +37,11 @@ export default function Leaderboard({ grade, title, highlightUid }) {
         ? query(base, where('grade', '==', grade), orderBy('totalPoints', 'desc'), limit(25))
         : query(base, orderBy('totalPoints', 'desc'), limit(25));
       const snap = await getDocs(q);
-      setRows(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      setRows(data);
+      try {
+        sessionStorage.setItem(cacheKey, JSON.stringify({ time: Date.now(), rows: data }));
+      } catch {}
     } catch (e) {
       console.error('Leaderboard load failed', e);
     } finally {
@@ -31,7 +50,7 @@ export default function Leaderboard({ grade, title, highlightUid }) {
   };
 
   useEffect(() => {
-    load();
+    load(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [grade]);
 
@@ -39,7 +58,7 @@ export default function Leaderboard({ grade, title, highlightUid }) {
     <div className="rounded-2xl bg-white p-4 shadow-card">
       <div className="mb-2 flex items-center justify-between">
         <h3 className="font-display text-base font-semibold text-plum-900">{title}</h3>
-        <button onClick={load} className="text-xs text-plum-600 hover:text-plum-800">
+        <button onClick={() => load(true)} className="text-xs text-plum-600 hover:text-plum-800">
           Refresh
         </button>
       </div>

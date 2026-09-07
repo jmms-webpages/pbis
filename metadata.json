@@ -1,0 +1,6 @@
+{
+  "name": "PBIS Rewards",
+  "description": "PBIS rewards system for school classrooms, teachers, and students.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

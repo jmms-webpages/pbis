@@ -40,62 +40,95 @@ export default function ClassRoster({ classData, teacherId, teacherName }) {
     setSelected(new Set());
   }, [classData.id]);
 
-  // Load roster student profiles
-  useEffect(() => {
-    async function loadRoster() {
-      if (!classData.studentIds?.length) {
-        setStudents([]);
-        return;
-      }
-      // Firestore 'in' queries cap at 30 — chunk for larger rosters.
-      const chunks = [];
-      for (let i = 0; i < classData.studentIds.length; i += 30) {
-        chunks.push(classData.studentIds.slice(i, i + 30));
-      }
-      const all = [];
-      for (const chunk of chunks) {
-        const snap = await getDocs(query(collection(db, 'students'), where('__name__', 'in', chunk)));
-        snap.forEach((d) => all.push({ id: d.id, ...d.data() }));
-      }
-      all.sort((a, b) => (a.lastNameLower || a.displayName || '').localeCompare(b.lastNameLower || b.displayName || ''));
-      setStudents(all);
+  // Load roster student profiles with session caching for zero-read tab switching
+  const loadRoster = async (force = false) => {
+    if (!classData.studentIds?.length) {
+      setStudents([]);
+      return;
     }
-    loadRoster();
-  }, [classData.studentIds]);
+    const cacheKey = `pbis_roster_students_${classData.id}`;
+    if (!force) {
+      const cached = sessionStorage.getItem(cacheKey);
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length === classData.studentIds.length) {
+            setStudents(parsed);
+            return;
+          }
+        } catch {}
+      }
+    }
+    // Firestore 'in' queries cap at 30 — chunk for larger rosters.
+    const chunks = [];
+    for (let i = 0; i < classData.studentIds.length; i += 30) {
+      chunks.push(classData.studentIds.slice(i, i + 30));
+    }
+    const all = [];
+    for (const chunk of chunks) {
+      const snap = await getDocs(query(collection(db, 'students'), where('__name__', 'in', chunk)));
+      snap.forEach((d) => all.push({ id: d.id, ...d.data() }));
+    }
+    all.sort((a, b) => (a.lastNameLower || a.displayName || '').localeCompare(b.lastNameLower || b.displayName || ''));
+    setStudents(all);
+    try {
+      sessionStorage.setItem(cacheKey, JSON.stringify(all));
+    } catch {}
+  };
+
+  useEffect(() => {
+    loadRoster(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [classData.id, classData.studentIds]);
 
   // Load today's award guard docs for everyone in this roster, so buttons
   // reflect school-wide state (any teacher, any class) not just this
   // class. WORK_COMPLETION is excluded — it's uncapped and never creates
   // a guard doc, so there's nothing to check for it.
+  //
+  // OPTIMIZATION: Batched via `where('studentId', 'in', chunk)` to turn
+  // what used to be (students.length * 5) queries into 1 single batched
+  // query, saving massive reads per class view.
   useEffect(() => {
     async function loadAwards() {
-      if (students.length === 0) {
+      if (!students.length) {
         setTodayAwards({});
         return;
       }
-      const cappedCategories = [...PER_STUDENT_CATEGORIES, ...WHOLE_CLASS_CATEGORIES].filter(
-        (c) => c.id !== 'WORK_COMPLETION'
-      );
+
       const map = {};
-      await Promise.all(
-        students.map(async (s) => {
-          const results = await Promise.all(
-            cappedCategories.map(async (c) => {
-              const snap = await getDocs(
-                query(
-                  collection(db, 'dailyAwards'),
-                  where('studentId', '==', s.id),
-                  where('dateKey', '==', dateKey),
-                  where('category', '==', c.id)
-                )
-              );
-              return [c.id, !snap.empty];
-            })
-          );
-          map[s.id] = new Set(results.filter(([, awarded]) => awarded).map(([cat]) => cat));
-        })
-      );
-      setTodayAwards(map);
+      students.forEach((s) => {
+        map[s.id] = new Set();
+      });
+
+      const studentIds = students.map((s) => s.id);
+      const chunks = [];
+      for (let i = 0; i < studentIds.length; i += 30) {
+        chunks.push(studentIds.slice(i, i + 30));
+      }
+
+      try {
+        await Promise.all(
+          chunks.map(async (chunk) => {
+            const snap = await getDocs(
+              query(
+                collection(db, 'dailyAwards'),
+                where('studentId', 'in', chunk),
+                where('dateKey', '==', dateKey)
+              )
+            );
+            snap.forEach((d) => {
+              const data = d.data();
+              if (data?.studentId && data?.category && map[data.studentId]) {
+                map[data.studentId].add(data.category);
+              }
+            });
+          })
+        );
+        setTodayAwards(map);
+      } catch (e) {
+        console.error('Failed to load batched daily awards', e);
+      }
     }
     loadAwards();
   }, [students, dateKey]);
@@ -221,12 +254,21 @@ export default function ClassRoster({ classData, teacherId, teacherName }) {
               Period {classData.period} · Grade {classData.gradeLevel} · {students.length} students
             </p>
           </div>
-          <button
-            onClick={() => setShowAddStudents(true)}
-            className="rounded-lg border border-plum-200 px-3 py-1.5 text-sm font-medium text-plum-700 hover:bg-plum-50"
-          >
-            + Add students
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => loadRoster(true)}
+              title="Refresh roster from database"
+              className="rounded-lg border border-plum-200 px-3 py-1.5 text-sm font-medium text-plum-700 hover:bg-plum-50"
+            >
+              ↻ Refresh
+            </button>
+            <button
+              onClick={() => setShowAddStudents(true)}
+              className="rounded-lg border border-plum-200 px-3 py-1.5 text-sm font-medium text-plum-700 hover:bg-plum-50"
+            >
+              + Add students
+            </button>
+          </div>
         </div>
 
         {students.length > 0 && (

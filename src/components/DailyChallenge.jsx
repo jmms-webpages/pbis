@@ -5,57 +5,142 @@ import { getTodayDateKey, formatDateKeyForDisplay } from '../lib/dateKey';
 import { submitDailyChallengeAnswer } from '../lib/pbis';
 import { useAuth } from '../context/AuthContext';
 
-export default function DailyChallenge() {
+export default function DailyChallenge({ studentDoc }) {
   const { firebaseUser } = useAuth();
   const dateKey = getTodayDateKey();
-  const [status, setStatus] = useState('loading'); // loading | done | active
-  const [pool, setPool] = useState([]);
-  const [seenIds, setSeenIds] = useState([]);
+  const [status, setStatus] = useState('loading'); // loading | done | active | empty
   const [current, setCurrent] = useState(null);
   const [selected, setSelected] = useState(null);
   const [feedback, setFeedback] = useState(null); // 'wrong' | null
   const [submitting, setSubmitting] = useState(false);
 
-  const pickNext = useCallback(
-    (poolArg, seenArg) => {
-      const remaining = poolArg.filter((q) => !seenArg.includes(q.id));
-      const source = remaining.length > 0 ? remaining : poolArg; // cycle back if pool exhausted
-      const next = source[Math.floor(Math.random() * source.length)];
-      setCurrent(next || null);
-      setSelected(null);
-    },
-    []
-  );
-
   useEffect(() => {
     async function load() {
-      const guardSnap = await getDoc(
-        doc(db, 'dailyAwards', `${firebaseUser.uid}_${dateKey}_DAILY_CHALLENGE`)
-      );
-      if (guardSnap.exists()) {
+      const doneKey = `pbis_challenge_done_${firebaseUser.uid}_${dateKey}`;
+
+      // 1. Check persistent browser storage (0 Firestore reads)
+      if (localStorage.getItem(doneKey) === 'true' || sessionStorage.getItem(doneKey) === 'true') {
         setStatus('done');
         return;
       }
-      const qSnap = await getDocs(
-        query(collection(db, 'dailyChallengeQuestions'), where('active', '==', true))
-      );
-      const questions = qSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      setPool(questions);
-      if (questions.length === 0) {
-        setStatus('empty');
+
+      // 2. Check studentDoc already in memory from AppShell listener (0 Firestore reads)
+      if (
+        studentDoc?.lastDailyChallengeDate === dateKey ||
+        (studentDoc?.lastAwardCategory === 'DAILY_CHALLENGE' && studentDoc?.lastAwardDateKey === dateKey)
+      ) {
+        localStorage.setItem(doneKey, 'true');
+        setStatus('done');
         return;
       }
-      pickNext(questions, []);
-      setStatus('active');
+
+      // 3. Fallback: Check guard doc only if storage is unpopulated (1 read max)
+      try {
+        const guardSnap = await getDoc(
+          doc(db, 'dailyAwards', `${firebaseUser.uid}_${dateKey}_DAILY_CHALLENGE`)
+        );
+        if (guardSnap.exists()) {
+          localStorage.setItem(doneKey, 'true');
+          setStatus('done');
+          return;
+        }
+      } catch (err) {
+        console.warn('Guard check error:', err);
+      }
+
+      // 4. Fetch Question of the Day with local caching
+      const questionCacheKey = `pbis_daily_q_${dateKey}`;
+      const cachedQ = localStorage.getItem(questionCacheKey);
+      if (cachedQ) {
+        try {
+          const parsed = JSON.parse(cachedQ);
+          if (parsed && parsed.questionText && parsed.choices) {
+            setCurrent(parsed);
+            setStatus('active');
+            return;
+          }
+        } catch {
+          // invalid cache, continue
+        }
+      }
+
+      // Attempt 1: Fetch single dedicated Question of the Day document (1 single read)
+      try {
+        const dailyDocRef = doc(db, 'dailyChallengeQuestions', `daily_${dateKey}`);
+        const dailyDocSnap = await getDoc(dailyDocRef);
+        if (dailyDocSnap.exists()) {
+          const d = dailyDocSnap.data();
+          const qObj = {
+            id: d.questionId || dailyDocSnap.id,
+            questionText: d.questionText,
+            choices: d.choices,
+            category: d.category || null,
+          };
+          setCurrent(qObj);
+          localStorage.setItem(questionCacheKey, JSON.stringify(qObj));
+          setStatus('active');
+          return;
+        }
+      } catch (err) {
+        console.warn('Could not read scheduled daily question doc:', err);
+      }
+
+      // Attempt 2: Fetch 'today' alias document (1 single read)
+      try {
+        const todayDocRef = doc(db, 'dailyChallengeQuestions', 'today');
+        const todayDocSnap = await getDoc(todayDocRef);
+        if (todayDocSnap.exists()) {
+          const d = todayDocSnap.data();
+          const qObj = {
+            id: d.questionId || todayDocSnap.id,
+            questionText: d.questionText,
+            choices: d.choices,
+            category: d.category || null,
+          };
+          setCurrent(qObj);
+          localStorage.setItem(questionCacheKey, JSON.stringify(qObj));
+          setStatus('active');
+          return;
+        }
+      } catch (err) {
+        console.warn('Could not read today alias doc:', err);
+      }
+
+      // Fallback: Read active question pool once, pick deterministic daily question,
+      // and cache in localStorage for the day so subsequent loads require 0 reads.
+      try {
+        const qSnap = await getDocs(
+          query(collection(db, 'dailyChallengeQuestions'), where('active', '==', true))
+        );
+        const validQuestions = qSnap.docs
+          .filter((d) => !d.id.startsWith('daily_') && d.id !== 'today')
+          .map((d) => ({ id: d.id, ...d.data() }));
+
+        if (validQuestions.length === 0) {
+          setStatus('empty');
+          return;
+        }
+
+        // Deterministic hash so all students get the exact same Question of the Day
+        const hash = dateKey.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+        const dailyQuestion = validQuestions[hash % validQuestions.length];
+        setCurrent(dailyQuestion);
+        localStorage.setItem(questionCacheKey, JSON.stringify(dailyQuestion));
+        setStatus('active');
+      } catch (poolErr) {
+        console.error('Failed to load daily questions', poolErr);
+        setStatus('empty');
+      }
     }
+
     load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [firebaseUser.uid, dateKey]);
+  }, [firebaseUser.uid, dateKey, studentDoc?.lastDailyChallengeDate, studentDoc?.lastAwardCategory, studentDoc?.lastAwardDateKey]);
 
   const handleSubmit = async () => {
     if (selected === null || !current) return;
     setSubmitting(true);
     setFeedback(null);
+    const doneKey = `pbis_challenge_done_${firebaseUser.uid}_${dateKey}`;
     try {
       const result = await submitDailyChallengeAnswer({
         studentId: firebaseUser.uid,
@@ -63,15 +148,16 @@ export default function DailyChallenge() {
         selectedAnswer: selected,
       });
       if (result.correct) {
+        localStorage.setItem(doneKey, 'true');
+        sessionStorage.setItem(doneKey, 'true');
         setStatus('done');
       } else {
-        const nextSeen = [...seenIds, current.id];
-        setSeenIds(nextSeen);
         setFeedback('wrong');
-        pickNext(pool, nextSeen);
       }
     } catch (e) {
       if (e.message === 'ALREADY_COMPLETED_TODAY') {
+        localStorage.setItem(doneKey, 'true');
+        sessionStorage.setItem(doneKey, 'true');
         setStatus('done');
       } else {
         console.error(e);
@@ -134,7 +220,7 @@ export default function DailyChallenge() {
 
       {feedback === 'wrong' && (
         <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
-          Not quite — here's another question.
+          Not quite — rethink your answer and try another choice!
         </p>
       )}
 

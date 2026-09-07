@@ -294,7 +294,7 @@ service cloud.firestore {
 
     match /pointTransactions/{txId} {
       allow read: if isAdmin()
-        || (isStudent() && resource.data.studentId == request.auth.uid)
+        || (isSignedIn() && resource.data.studentId == request.auth.uid)
         || (isTeacher() && resource.data.teacherId == request.auth.uid);
 
       // Admin corrections
@@ -409,7 +409,14 @@ service cloud.firestore {
       // Everyone signed in can read question text/choices — but NOT the
       // separate answers collection below.
       allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow write: if isAdmin() || isTeacher();
+    }
+
+    // ---------- System Aggregations (for Blaze Plan Cloud Functions) ----------
+
+    match /system/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin() || isTeacher();
     }
 
     match /dailyChallengeAnswers/{qId} {

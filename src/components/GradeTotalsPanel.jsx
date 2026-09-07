@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, getDocs, doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 
 const GRADES = [6, 7, 8];
@@ -7,26 +7,55 @@ const GRADES = [6, 7, 8];
 /**
  * Shows one big number per grade — total combined points across every
  * student in that grade — meant to be projected/read aloud to spark
- * grade-vs-grade competition. Deliberately NOT shown anywhere in the
- * student-facing UI.
+ * grade-vs-grade competition.
  *
- * Reads the whole `students` collection once per click (~1,400 docs at
- * full school size) and sums client-side by grade. This is simpler and
- * actually cheaper than three separate grade-filtered queries (same
- * total documents read, one round trip instead of three), and it needs
- * no composite index since it's a plain unfiltered collection read.
- * Manual refresh only — no live listener — since this isn't something
- * that needs to update in real time, just an on-demand snapshot for a
- * classroom moment.
+ * Blaze Plan Optimization:
+ * Checks system/gradeTotals first (1 single document read).
+ * If not present or manual forced recalculation, computes from students
+ * and publishes back to system/gradeTotals so all other staff get 1-read access.
  */
 export default function GradeTotalsPanel() {
   const [totals, setTotals] = useState(null);
   const [loading, setLoading] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState(null);
 
-  const refresh = async () => {
+  const refresh = async (force = false) => {
+    const cacheKey = 'pbis_grade_totals';
+    if (!force) {
+      const cached = sessionStorage.getItem(cacheKey);
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached);
+          if (Date.now() - (parsed.time || 0) < 30 * 60 * 1000) {
+            setTotals(parsed.sums);
+            setLastRefreshed(new Date(parsed.time));
+            return;
+          }
+        } catch {}
+      }
+    }
+
     setLoading(true);
     try {
+      // 1. Try reading the aggregated single document (1 read on Blaze plan)
+      if (!force) {
+        try {
+          const sysSnap = await getDoc(doc(db, 'system', 'gradeTotals'));
+          if (sysSnap.exists() && sysSnap.data().sums) {
+            const data = sysSnap.data();
+            setTotals(data.sums);
+            const stamp = data.updatedAt?.toDate ? data.updatedAt.toDate() : new Date();
+            setLastRefreshed(stamp);
+            sessionStorage.setItem(cacheKey, JSON.stringify({ time: Date.now(), sums: data.sums }));
+            setLoading(false);
+            return;
+          }
+        } catch (sysErr) {
+          console.warn('Could not read system/gradeTotals aggregation doc, falling back', sysErr);
+        }
+      }
+
+      // 2. Fallback: scan students collection and recalculate
       const snap = await getDocs(collection(db, 'students'));
       const sums = { 6: 0, 7: 0, 8: 0 };
       snap.forEach((d) => {
@@ -36,7 +65,19 @@ export default function GradeTotalsPanel() {
         }
       });
       setTotals(sums);
-      setLastRefreshed(new Date());
+      const now = new Date();
+      setLastRefreshed(now);
+      sessionStorage.setItem(cacheKey, JSON.stringify({ time: now.getTime(), sums }));
+
+      // Save to system/gradeTotals to optimize all future reads for other teachers
+      try {
+        await setDoc(doc(db, 'system', 'gradeTotals'), {
+          sums,
+          updatedAt: serverTimestamp(),
+        }, { merge: true });
+      } catch (saveErr) {
+        console.warn('Could not write back to system/gradeTotals', saveErr);
+      }
     } catch (e) {
       console.error('Failed to load grade totals', e);
     } finally {
@@ -45,7 +86,7 @@ export default function GradeTotalsPanel() {
   };
 
   useEffect(() => {
-    refresh();
+    refresh(false);
   }, []);
 
   return (
@@ -58,7 +99,7 @@ export default function GradeTotalsPanel() {
           </p>
         </div>
         <button
-          onClick={refresh}
+          onClick={() => refresh(true)}
           disabled={loading}
           className="rounded-lg border border-plum-200 px-3 py-1.5 text-sm font-medium text-plum-700 hover:bg-plum-50 disabled:opacity-50"
         >

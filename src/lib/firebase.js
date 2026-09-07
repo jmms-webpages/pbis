@@ -2,17 +2,23 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
+export const isFirebaseConfigured = Boolean(
+  import.meta.env.VITE_FIREBASE_API_KEY && import.meta.env.VITE_FIREBASE_PROJECT_ID
+);
+
 // Fill these in from Firebase Console > Project Settings > General > Your apps.
 // Values are read from environment variables so real credentials never live
 // in source control — copy .env.example to .env.local and fill it in.
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'AIzaSyPlaceholderKeyForDevelopmentOnly',
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || 'placeholder-app.firebaseapp.com',
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'placeholder-app',
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || 'placeholder-app.appspot.com',
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '123456789012',
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || '1:123456789012:web:placeholder',
 };
+
+export const firebaseProjectId = firebaseConfig.projectId;
 
 export const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
