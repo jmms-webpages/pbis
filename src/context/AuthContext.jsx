@@ -50,9 +50,18 @@ async function bootstrapUserDocument(firebaseUser) {
     let role = 'student';
     let gradeLevels = [];
 
-    if (rosterSnap.exists() && !rosterSnap.data().claimed) {
-      role = rosterSnap.data().role || 'student';
-      gradeLevels = rosterSnap.data().gradeLevels || [];
+    // Grant the roster's role if it's either unclaimed, OR it was
+    // already claimed by THIS SAME account (e.g. their users/{uid} doc
+    // was deleted and they're re-bootstrapping) — but never for a
+    // different account than whoever claimed it first, which is what
+    // stops a stranger from grabbing a role that's already someone
+    // else's.
+    const rosterData = rosterSnap.data();
+    const canClaim =
+      rosterSnap.exists() && (!rosterData.claimed || rosterData.claimedBy === firebaseUser.uid);
+    if (canClaim) {
+      role = rosterData.role || 'student';
+      gradeLevels = rosterData.gradeLevels || [];
       tx.update(rosterRef, { claimed: true, claimedBy: firebaseUser.uid, claimedAt: serverTimestamp() });
     }
 
@@ -106,6 +115,7 @@ export function AuthProvider({ children }) {
   const [firebaseUser, setFirebaseUser] = useState(null);
   const [profile, setProfile] = useState(null); // users/{uid} doc
   const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState(null);
 
   const refreshProfile = useCallback(async (uid) => {
     const snap = await getDoc(doc(db, 'users', uid));
@@ -115,10 +125,43 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
       setLoading(true);
+      setAuthError(null);
+
+      // This runs for BOTH a fresh interactive sign-in and a session
+      // Firebase silently restores from a previous visit — the domain
+      // check in signIn() below only covers the former. Without this,
+      // an account that was allowed before but has since been removed
+      // from the allowed list (e.g. a temporary testing domain that got
+      // revoked) would sail past that check on page reload and crash
+      // straight into a Firestore permission error instead.
+      if (user && ALLOWED_SCHOOL_DOMAINS.length > 0) {
+        const emailDomain = (user.email || '').split('@')[1]?.toLowerCase();
+        if (!ALLOWED_SCHOOL_DOMAINS.includes(emailDomain)) {
+          await firebaseSignOut(auth);
+          setAuthError(`This account (${user.email}) is no longer allowed to sign in here.`);
+          setFirebaseUser(null);
+          setProfile(null);
+          setLoading(false);
+          return;
+        }
+      }
+
       setFirebaseUser(user);
       if (user) {
-        const data = await bootstrapUserDocument(user);
-        setProfile({ id: user.uid, ...data });
+        // Anything that goes wrong here (a rules rejection, a network
+        // blip, whatever) used to leave the app stuck on the loading
+        // screen forever, since nothing ever called setLoading(false).
+        // Now it signs out cleanly and surfaces a message instead.
+        try {
+          const data = await bootstrapUserDocument(user);
+          setProfile({ id: user.uid, ...data });
+        } catch (e) {
+          console.error('Sign-in setup failed', e);
+          setAuthError('Something went wrong setting up your account. Please try signing in again.');
+          await firebaseSignOut(auth);
+          setFirebaseUser(null);
+          setProfile(null);
+        }
       } else {
         setProfile(null);
       }
@@ -128,6 +171,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   const signIn = useCallback(async () => {
+    setAuthError(null);
     const result = await signInWithPopup(auth, googleProvider);
     // With 2+ allowed domains, Google's own account picker can't filter
     // by domain (its `hd` param only takes one), so we check here instead
@@ -154,6 +198,7 @@ export function AuthProvider({ children }) {
     profile,
     role: profile?.role || null,
     loading,
+    authError,
     signIn,
     signOut,
     refreshProfile: () => firebaseUser && refreshProfile(firebaseUser.uid),
