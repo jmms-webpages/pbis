@@ -6,6 +6,7 @@ import ReportsTab from '../admin/ReportsTab';
 import AdjustPointsTab from '../admin/AdjustPointsTab';
 import QuestionsTab from '../admin/QuestionsTab';
 import RosterTab from '../admin/RosterTab';
+import DangerZoneTab from '../admin/DangerZoneTab';
 
 const TABS = [
   { id: 'students', label: 'Student Points' },
@@ -13,6 +14,7 @@ const TABS = [
   { id: 'adjust', label: 'Adjust Points' },
   { id: 'questions', label: 'Daily Challenge Questions' },
   { id: 'roster', label: 'Staff Roster' },
+  { id: 'danger', label: 'Danger Zone' },
 ];
 
 export default function AdminDashboard() {
@@ -26,6 +28,7 @@ export default function AdminDashboard() {
       {tab === 'adjust' && <AdjustPointsTab adminId={profile.id} />}
       {tab === 'questions' && <QuestionsTab />}
       {tab === 'roster' && <RosterTab />}
+      {tab === 'danger' && <DangerZoneTab />}
     </AppShell>
   );
 }
