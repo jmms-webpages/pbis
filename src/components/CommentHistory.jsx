@@ -3,7 +3,6 @@ import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { getDateKeyDaysAgo } from '../lib/dateKey';
 
-
 const CATEGORY_LABEL = { SAFE: 'Safe', KIND: 'Kind', RESPONSIBLE: 'Responsible' };
 const CATEGORY_COLOR = { SAFE: 'bg-plum-500', KIND: 'bg-gold-400', RESPONSIBLE: 'bg-plum-700' };
 
@@ -23,10 +22,12 @@ const CATEGORY_COLOR = { SAFE: 'bg-plum-500', KIND: 'bg-gold-400', RESPONSIBLE: 
 export default function CommentHistory({ studentId }) {
   const [comments, setComments] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     async function load() {
       setLoading(true);
+      setError(null);
       try {
         const cutoff = getDateKeyDaysAgo(30);
         const snap = await getDocs(
@@ -43,6 +44,7 @@ export default function CommentHistory({ studentId }) {
         setComments(rows);
       } catch (e) {
         console.error('Failed to load comment history', e);
+        setError(e.message || 'Failed to load.');
       } finally {
         setLoading(false);
       }
@@ -52,6 +54,14 @@ export default function CommentHistory({ studentId }) {
 
   if (loading) {
     return <p className="py-6 text-center text-sm text-plum-700/50">Loading…</p>;
+  }
+
+  if (error) {
+    return (
+      <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+        Couldn't load comments: {error}
+      </p>
+    );
   }
 
   if (comments.length === 0) {
