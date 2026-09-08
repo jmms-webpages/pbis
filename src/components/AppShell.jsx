@@ -1,4 +1,6 @@
 import { useAuth } from '../context/AuthContext';
+import polarBearHead from '../assets/polar-bear-head.png';
+import polarBearFallback from '../assets/polar-bear.png';
 
 export default function AppShell({ title, tabs, activeTab, onTabChange, children }) {
   const { profile, signOut } = useAuth();
@@ -12,12 +14,18 @@ export default function AppShell({ title, tabs, activeTab, onTabChange, children
             {/* Polar bear logo stretched from top to bottom of the purple header */}
             <div className="flex shrink-0 items-center justify-center self-stretch py-0">
               <img
-                src="/polar-bear-head.png"
+                src={polarBearHead}
                 alt="Jackson Polar Bears"
                 width={hasTabs ? 112 : 64}
                 height={hasTabs ? 112 : 64}
                 loading="eager"
                 decoding="sync"
+                onError={(e) => {
+                  if (!e.currentTarget.dataset.failed) {
+                    e.currentTarget.dataset.failed = 'true';
+                    e.currentTarget.src = polarBearFallback;
+                  }
+                }}
                 className={`${
                   hasTabs
                     ? 'h-20 w-20 sm:h-24 sm:w-24 md:h-28 md:w-28'

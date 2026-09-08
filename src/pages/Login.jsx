@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { isFirebaseConfigured, firebaseProjectId } from '../lib/firebase';
+import polarBearHead from '../assets/polar-bear-head.png';
+import polarBearFallback from '../assets/polar-bear.png';
 
 export default function Login() {
   const { signIn, authError } = useAuth();
@@ -86,12 +88,18 @@ export default function Login() {
         <div className="mb-6 text-center">
           <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-white p-2 shadow-md ring-2 ring-gold-400">
             <img
-              src="/polar-bear-head.png"
+              src={polarBearHead}
               alt="Jackson Polar Bears"
               width="64"
               height="64"
               loading="eager"
               decoding="sync"
+              onError={(e) => {
+                if (!e.currentTarget.dataset.failed) {
+                  e.currentTarget.dataset.failed = 'true';
+                  e.currentTarget.src = polarBearFallback;
+                }
+              }}
               className="h-full w-full object-contain"
             />
           </div>
