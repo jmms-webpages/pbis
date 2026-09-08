@@ -72,20 +72,27 @@ export default function Login() {
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-plum-900 px-6 py-8">
-      {/* Ambient gold arcs */}
+      {/* Ambient gold & purple arcs matching Jackson branding */}
       <svg
         className="pointer-events-none absolute inset-0 h-full w-full opacity-40"
         viewBox="0 0 1200 800"
         preserveAspectRatio="xMidYMid slice"
       >
-        <circle cx="1000" cy="120" r="380" stroke="#c2930f" strokeWidth="1.5" fill="none" opacity="0.5" />
-        <circle cx="120" cy="720" r="260" stroke="#8f5cc4" strokeWidth="1.5" fill="none" opacity="0.5" />
+        <circle cx="1000" cy="120" r="380" stroke="#fbbb04" strokeWidth="2" fill="none" opacity="0.4" />
+        <circle cx="120" cy="720" r="260" stroke="#7e3ad0" strokeWidth="2" fill="none" opacity="0.4" />
       </svg>
 
       <div className="relative z-10 w-full max-w-md rounded-2xl bg-paper p-7 sm:p-8 shadow-2xl">
         <div className="mb-6 text-center">
-          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-plum-700 font-display text-2xl font-semibold text-gold-300">
-            P
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-white p-2 shadow-md ring-2 ring-gold-400">
+            <img
+              src="/polar-bear-head.png"
+              alt="Jackson Polar Bears"
+              className="h-full w-full object-contain"
+              onError={(e) => {
+                e.currentTarget.src = '/polar-bear.png';
+              }}
+            />
           </div>
           <h1 className="font-display text-2xl font-semibold text-plum-900">PBIS Rewards</h1>
           <p className="mt-1 text-sm text-plum-700/70">Sign in with your school Google account</p>

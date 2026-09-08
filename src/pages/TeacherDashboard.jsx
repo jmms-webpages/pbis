@@ -41,7 +41,7 @@ export default function TeacherDashboard() {
 
   return (
     <AppShell title="PBIS Rewards — Teacher">
-      <div className="-mx-4 -my-6 flex min-h-[calc(100vh-8.5rem)] sm:-mx-6">
+      <div className="-mx-4 -my-6 flex min-h-[calc(100vh-8.5rem)] sm:-mx-6 lg:-mx-8">
         <TeacherSidebar
           classes={classes}
           view={view}

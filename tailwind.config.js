@@ -4,28 +4,29 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Core school palette — deliberately deeper/more saturated than
-        // generic "school purple" so it reads intentional, not a template.
+        // Jackson Local Schools official palette:
+        // Primary Purple #501b99 with rich supporting shades
+        // Secondary Athletic Gold #fbbb04 with crisp contrasting shades
         plum: {
-          50: '#f5f1fa',
-          100: '#e8dcf5',
-          200: '#d2b9eb',
-          300: '#b088d9',
-          400: '#8f5cc4',
-          500: '#6f3aa8',
-          600: '#582c88',
-          700: '#452368',
-          800: '#33194d',
-          900: '#221033',
+          50: '#f5f0fb',
+          100: '#e8dbf7',
+          200: '#d4bcf0',
+          300: '#b892e6',
+          400: '#9b64dc',
+          500: '#7e3ad0',
+          600: '#6825ba',
+          700: '#501b99', // Jackson primary purple
+          800: '#3e1378',
+          900: '#2c0c57', // Deep header & background purple
         },
         gold: {
-          50: '#fdf9ec',
-          100: '#faf0c9',
-          200: '#f3dd8a',
-          300: '#ecc94f',
-          400: '#e0af1f',
-          500: '#c2930f',
-          600: '#9c740c',
+          50: '#fffcf0',
+          100: '#fef7d6',
+          200: '#fdeda8',
+          300: '#fce075',
+          400: '#fbbb04', // Jackson official secondary gold
+          500: '#dfa202',
+          600: '#b88300',
         },
         paper: '#fbfaf7',
       },
