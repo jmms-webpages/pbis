@@ -14,14 +14,15 @@ export default function AppShell({ title, tabs, activeTab, onTabChange, children
               <img
                 src="/polar-bear-head.png"
                 alt="Jackson Polar Bears"
+                width={hasTabs ? 112 : 64}
+                height={hasTabs ? 112 : 64}
+                loading="eager"
+                decoding="sync"
                 className={`${
                   hasTabs
-                    ? 'h-20 w-20 sm:h-24 sm:w-24 md:h-26 md:w-26'
+                    ? 'h-20 w-20 sm:h-24 sm:w-24 md:h-28 md:w-28'
                     : 'h-14 w-14 sm:h-16 sm:w-16'
-                } object-contain filter drop-shadow-md`}
-                onError={(e) => {
-                  e.currentTarget.src = '/polar-bear.png';
-                }}
+                } object-contain`}
               />
             </div>
 

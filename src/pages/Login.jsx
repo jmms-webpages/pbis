@@ -88,10 +88,11 @@ export default function Login() {
             <img
               src="/polar-bear-head.png"
               alt="Jackson Polar Bears"
+              width="64"
+              height="64"
+              loading="eager"
+              decoding="sync"
               className="h-full w-full object-contain"
-              onError={(e) => {
-                e.currentTarget.src = '/polar-bear.png';
-              }}
             />
           </div>
           <h1 className="font-display text-2xl font-semibold text-plum-900">PBIS Rewards</h1>
